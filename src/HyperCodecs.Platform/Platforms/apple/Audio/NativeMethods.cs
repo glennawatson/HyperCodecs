@@ -4,7 +4,7 @@
 
 using System.Runtime.InteropServices;
 
-namespace HyperCodecs.Platform.Audio.MacOS;
+namespace HyperCodecs.Platform.Audio.Apple;
 
 /// <summary>Source generated entry points of the macOS Audio Toolbox functions the sound output uses.</summary>
 internal static unsafe partial class NativeMethods

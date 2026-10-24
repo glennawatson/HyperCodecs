@@ -18,6 +18,7 @@ jobs:
       minverTagPrefix: ''
       uploadCodecov: false
       testTimeout: '25m'
+      installWorkloads: true
       dotnetVersions: |
         11.x
         10.x
@@ -48,6 +49,8 @@ jobs:
         uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
         with:
           src-folder: 'src'
+          solution-file: HyperCodecs.slnx
+          install-workloads: 'true'
           stamp-version: 'false'
           dotnet-versions: |
             11.x

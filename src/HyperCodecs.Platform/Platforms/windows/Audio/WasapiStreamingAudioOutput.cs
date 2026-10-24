@@ -15,7 +15,7 @@ namespace HyperCodecs.Platform.Audio.Windows;
 /// every call that may come from a different thread joins the multithreaded apartment first.
 /// </summary>
 [DebuggerDisplay("WasapiStreamingAudioOutput: WASAPI")]
-public sealed unsafe class WasapiStreamingAudioOutput : IStreamingAudioOutput
+internal sealed unsafe class WasapiStreamingAudioOutput : IStreamingAudioOutput
 {
     /// <summary>Shared mode.</summary>
     private const int SharedMode = 0;

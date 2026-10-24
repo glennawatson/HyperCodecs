@@ -3,6 +3,17 @@
     <!-- The library, tests and benchmarks build for .NET 10 (LTS) and .NET 11. -->
     <LibraryTargetFrameworks>net10.0;net11.0</LibraryTargetFrameworks>
     <TargetFrameworks>$(LibraryTargetFrameworks)</TargetFrameworks>
+
+    <!-- HyperCodecs.Platform builds one assembly for each system, and each build holds only that system's code. Linux has no
+         platform target framework, so the plain net builds carry the Linux code. Apple targets build on macOS and Windows only. -->
+    <HyperCodecsWindowsTargets>net10.0-windows10.0.19041.0;net11.0-windows10.0.19041.0</HyperCodecsWindowsTargets>
+    <HyperCodecsAppleTargets>net10.0-ios;net10.0-tvos;net10.0-macos;net10.0-maccatalyst;net11.0-ios;net11.0-tvos;net11.0-macos;net11.0-maccatalyst</HyperCodecsAppleTargets>
+    <HyperCodecsAndroidTargets>net10.0-android36.0;net11.0-android37</HyperCodecsAndroidTargets>
+    <HyperCodecsPlatformTargetFrameworks>$(LibraryTargetFrameworks);$(HyperCodecsWindowsTargets);$(HyperCodecsAndroidTargets)</HyperCodecsPlatformTargetFrameworks>
+    <HyperCodecsPlatformTargetFrameworks Condition="$([MSBuild]::IsOsPlatform('Windows')) or $([MSBuild]::IsOsPlatform('OSX'))">$(HyperCodecsPlatformTargetFrameworks);$(HyperCodecsAppleTargets)</HyperCodecsPlatformTargetFrameworks>
+
+    <!-- Lets Linux and macOS build the net*-windows targets. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <MinVerTagPrefix></MinVerTagPrefix>
     <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
     <MinVerAutoIncrement>patch</MinVerAutoIncrement>
@@ -27,7 +38,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <WarningsAsErrors>nullable;CS4014</WarningsAsErrors>
     <Deterministic>true</Deterministic>
-    <!-- Only HyperCodecs ships as a NuGet package; it opts back in. -->
+    <!-- Only HyperCodecs and HyperCodecs.Platform ship as NuGet packages; they opt back in. -->
     <IsPackable>false</IsPackable>
 
     <IsTestProject Condition="'$(IsTestProject)' == ''">$([System.Text.RegularExpressions.Regex]::IsMatch('$(MSBuildProjectName)', '(^|\.)Tests$'))</IsTestProject>

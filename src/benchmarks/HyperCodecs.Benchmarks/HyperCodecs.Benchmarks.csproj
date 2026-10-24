@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- On Windows the benchmarks run against the Windows build of HyperCodecs.Platform, as the tests do. -->
     <TargetFrameworks>$(LibraryTargetFrameworks)</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::IsOsPlatform('Windows'))">$(HyperCodecsWindowsTargets)</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <Description>Allocation and throughput benchmarks for HyperCodecs.</Description>

@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Operating system sound output (WASAPI, CoreAudio, PulseAudio or PipeWire) and hardware video decoding (Media Foundation, VideoToolbox, VA-API) for HyperCodecs. Each part loads its system library at run time and reports when it is missing, so the managed decoders in HyperCodecs remain the fallback.</Description>
+    <TargetFrameworks>$(HyperCodecsPlatformTargetFrameworks)</TargetFrameworks>
+    <Description>Operating system sound output and hardware video decoding for HyperCodecs: WASAPI and Media Foundation on Windows, Audio Toolbox and VideoToolbox on Apple systems, AudioTrack and MediaCodec on Android, PulseAudio and VA-API on Linux. Each build holds only the code for its own system, and the managed decoders in HyperCodecs remain the fallback.</Description>
     <RootNamespace>HyperCodecs.Platform</RootNamespace>
+    <SystemPlatform>$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)'))</SystemPlatform>
+    <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'ios'">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'tvos'">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'macos'">12.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'android'">29.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
   <!-- NuGet package. Authors, licence and repository come from Directory.Build.props; MinVer sets the version. -->
@@ -9,7 +16,7 @@
     <IsPackable>true</IsPackable>
     <PackageId>HyperCodecs.Platform</PackageId>
     <Title>HyperCodecs.Platform</Title>
-    <PackageTags>audio;video;hardware;wasapi;coreaudio;pulseaudio;videotoolbox;mediafoundation;vaapi;h264;h265</PackageTags>
+    <PackageTags>audio;video;hardware;wasapi;mediafoundation;coreaudio;videotoolbox;pulseaudio;vaapi;mediacodec;h264;h265</PackageTags>
     <PackageProjectUrl>https://github.com/glennawatson/HyperCodecs</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -17,6 +24,8 @@
     <!-- The PDB is embedded in the assembly (DebugType embedded), so there is no separate symbol package. -->
     <IncludeSymbols>false</IncludeSymbols>
     <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- Android would otherwise add an empty Resource class to the shipped assembly. -->
+    <AndroidGenerateResourceDesigner>false</AndroidGenerateResourceDesigner>
   </PropertyGroup>
 
   <!-- Packing keeps compiler state machines so Mono hosts can load the package; see HyperCodecs.csproj. -->
@@ -30,6 +39,25 @@
 
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../../docs/hypercodecs/PLATFORM-README.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+
+  <!-- Each target framework compiles the shared code and the code of its own system only. -->
+  <ItemGroup>
+    <Compile Remove="Platforms\**\*.cs" />
+    <None Include="Platforms\**\*.cs" />
+    <Compile Include="Platforms\common\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SystemPlatform)' == ''">
+    <Compile Include="Platforms\linux\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SystemPlatform)' == 'windows'">
+    <Compile Include="Platforms\windows\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SystemPlatform)' == 'ios' or '$(SystemPlatform)' == 'tvos' or '$(SystemPlatform)' == 'macos' or '$(SystemPlatform)' == 'maccatalyst'">
+    <Compile Include="Platforms\apple\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(SystemPlatform)' == 'android'">
+    <Compile Include="Platforms\android\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>

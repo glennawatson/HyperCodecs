@@ -49,21 +49,24 @@ Video works the same way with `VideoDecoders.Create` and a `List<VideoFrame>` fo
 
 ## Sound output and hardware video
 
-The optional `HyperCodecs.Platform` package talks to the operating system. It loads each system library at run time, so a missing library or device is reported and the managed decoders stay as the fallback.
+The optional `HyperCodecs.Platform` package talks to the operating system. It has one build for each system, and each build holds only that system's code. A missing library or device is reported and the managed decoders stay as the fallback.
 
 ```console
 dotnet add package HyperCodecs.Platform
 ```
 
-| Part | Windows | macOS | Linux |
-|---|---|---|---|
-| Sound output (`IStreamingAudioOutput`) | WASAPI | Audio Toolbox | PulseAudio or PipeWire |
-| Hardware video (`PlatformVideoDecoders.Create`) | Media Foundation | VideoToolbox | VA-API |
+| Target framework | Sound output (`IStreamingAudioOutput`) | Hardware video (`PlatformVideoDecoders.Create`) |
+|---|---|---|
+| `net10.0-windows10.0.19041.0`, `net11.0-windows10.0.19041.0` | WASAPI | Media Foundation |
+| `-ios`, `-tvos`, `-macos`, `-maccatalyst` | Audio Toolbox | VideoToolbox |
+| `net10.0-android36.0`, `net11.0-android37.0` | AudioTrack | MediaCodec |
+| `net10.0`, `net11.0` (Linux) | PulseAudio or PipeWire | VA-API |
 
-Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` uses the hardware first for large pictures and the managed decoder first for small ones.
+Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` uses the hardware first for large pictures and the managed decoder first for small ones. A Windows or macOS app must target the Windows or Apple framework to get its system code; plain `net10.0` gets the Linux build.
+
 ## Build and test
 
-The repository needs the .NET 11 SDK. Everything builds for `net10.0` and `net11.0`.
+The repository needs the .NET 11 SDK. The core library, tests and benchmarks build for `net10.0` and `net11.0`. `HyperCodecs.Platform` also builds for Windows and Android, and for Apple systems on macOS and Windows. Android and Apple builds need their workloads (`dotnet workload restore`).
 
 ```console
 cd src

@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using HyperCodecs.Platform.Audio;
 
-namespace HyperCodecs.Platform.Audio.MacOS;
+namespace HyperCodecs.Platform.Audio.Apple;
 
 /// <summary>
 /// Plays a continuous stream of sound through a CoreAudio output queue on the default device. A small ring of buffers is reused:
@@ -16,7 +16,7 @@ namespace HyperCodecs.Platform.Audio.MacOS;
 /// in the buffers CoreAudio has not handed back yet.
 /// </summary>
 [DebuggerDisplay("AudioQueueStreamingOutput: CoreAudio")]
-public sealed unsafe class AudioQueueStreamingOutput : IStreamingAudioOutput
+internal sealed unsafe class AudioQueueStreamingOutput : IStreamingAudioOutput
 {
     /// <summary>The buffers in the ring.</summary>
     private const int BufferCount = 8;

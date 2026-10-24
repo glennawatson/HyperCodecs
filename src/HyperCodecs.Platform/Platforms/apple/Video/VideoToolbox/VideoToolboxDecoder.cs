@@ -104,7 +104,7 @@ internal sealed unsafe class VideoToolboxDecoder : VideoDecoder
     internal static VideoToolboxDecoder? TryCreate(MediaTrack track, out DecoderFailure failure)
     {
         ArgumentNullException.ThrowIfNull(track);
-        if (!OperatingSystem.IsMacOS() || track.Kind != MediaTrackKind.Video || track.Width <= 0 || track.Height <= 0 || track.Codec is not (MediaCodec.H264 or MediaCodec.H265))
+        if (!(OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsTvOS() || OperatingSystem.IsMacCatalyst()) || track.Kind != MediaTrackKind.Video || track.Width <= 0 || track.Height <= 0 || track.Codec is not (MediaCodec.H264 or MediaCodec.H265))
         {
             failure = new("The track is not one VideoToolbox can be given", 0);
             return null;

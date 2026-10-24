@@ -14,7 +14,7 @@ namespace HyperCodecs.Platform.Audio.Linux;
 /// counted down by the clock in between, because the simple API must not be called from two threads at once.
 /// </summary>
 [DebuggerDisplay("PulseStreamingAudioOutput: PulseAudio")]
-public sealed unsafe class PulseStreamingAudioOutput : IStreamingAudioOutput
+internal sealed unsafe class PulseStreamingAudioOutput : IStreamingAudioOutput
 {
     /// <summary>PulseAudio's 32 bit little endian float format.</summary>
     private const int Float32LittleEndian = 5;

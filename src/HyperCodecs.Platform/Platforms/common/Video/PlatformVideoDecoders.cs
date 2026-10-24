@@ -2,10 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
-using HyperCodecs;
-using HyperCodecs.Platform.Video.MediaFoundation;
-using HyperCodecs.Platform.Video.VaApi;
-using HyperCodecs.Platform.Video.VideoToolbox;
+using System.Runtime.CompilerServices;
 
 namespace HyperCodecs.Platform.Video;
 
@@ -28,45 +25,11 @@ public static class PlatformVideoDecoders
     /// <param name="track">The picture track.</param>
     /// <param name="reason">Receives why there is no decoder, when there is none.</param>
     /// <returns>The decoder, or <see langword="null"/> when this system has none for the coding.</returns>
-    internal static VideoDecoder? TryCreateNative(MediaTrack track, out string? reason)
-    {
-        reason = "This system has no operating system decoder.";
-        if (OperatingSystem.IsWindows())
-        {
-            var windows = MediaFoundationDecoder.TryCreate(track, out var windowsFailure);
-            reason = windows is null ? windowsFailure.ToString() : null;
-            return windows;
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            return TryCreateLinux(track, out reason);
-        }
-
-        if (!OperatingSystem.IsMacOS())
-        {
-            return null;
-        }
-
-        var mac = VideoToolboxDecoder.TryCreate(track, out var macFailure);
-        reason = mac is null ? macFailure.ToString() : null;
-        return mac;
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static VideoDecoder? TryCreateNative(MediaTrack track, out string? reason) => SystemVideoDecoders.TryCreate(track, out reason);
 
     /// <summary>Finds whether a track's pictures are big enough for the system's decoder to be the first choice.</summary>
     /// <param name="track">The picture track.</param>
     /// <returns><see langword="true"/> when they are.</returns>
     private static bool IsLargeEnough(MediaTrack track) => (long)track.Width * track.Height >= MinimumSystemPixels;
-
-    /// <summary>Makes the graphics hardware's decoder for a track on Linux, through VA-API.</summary>
-    /// <param name="track">The picture track.</param>
-    /// <param name="reason">Receives why there is no decoder, when there is none.</param>
-    /// <returns>The decoder, or <see langword="null"/>.</returns>
-    private static VideoDecoder? TryCreateLinux(MediaTrack track, out string? reason)
-    {
-        DecoderFailure failure;
-        VideoDecoder? decoder = track.Codec == MediaCodec.H265 ? VaApiH265Decoder.TryCreate(track, out failure) : VaApiH264Decoder.TryCreate(track, out failure);
-        reason = decoder is null ? failure.ToString() : null;
-        return decoder;
-    }
 }

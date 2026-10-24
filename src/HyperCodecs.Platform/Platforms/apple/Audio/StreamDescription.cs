@@ -4,7 +4,7 @@
 
 using System.Runtime.InteropServices;
 
-namespace HyperCodecs.Platform.Audio.MacOS;
+namespace HyperCodecs.Platform.Audio.Apple;
 
 /// <summary>Native <c>AudioStreamBasicDescription</c>.</summary>
 /// <param name="SampleRate">The sample rate.</param>

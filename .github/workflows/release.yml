@@ -47,9 +47,10 @@ jobs:
         push-tag: 'false'
 
   pack-nuget:
-    name: Pack the NuGet library
+    name: Pack the NuGet libraries
     needs: version
-    runs-on: ubuntu-latest
+    # HyperCodecs.Platform builds its Apple targets on macOS and Windows only, so the packages are packed on macOS.
+    runs-on: macos-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -58,7 +59,9 @@ jobs:
     - name: Setup .NET Environment
       uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
       with:
-        src-folder: '.'
+        src-folder: 'src'
+        solution-file: HyperCodecs.slnx
+        install-workloads: 'true'
         stamp-version: 'false'
         dotnet-versions: |
           11.x

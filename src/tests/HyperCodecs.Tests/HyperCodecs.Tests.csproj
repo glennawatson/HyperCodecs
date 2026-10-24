@@ -1,4 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- On Windows the tests run against the Windows build of HyperCodecs.Platform, so the Media Foundation and WASAPI code is tested;
+       elsewhere they run against the plain build, which holds the Linux code. Apple and Android builds are not test hosts. -->
+  <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
+    <TargetFrameworks>$(HyperCodecsWindowsTargets)</TargetFrameworks>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
     <ProjectReference Include="..\..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
