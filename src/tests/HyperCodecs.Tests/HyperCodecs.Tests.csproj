@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
+    <ProjectReference Include="..\..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,6 @@
 # HyperCodecs
 
-Sound and video containers and decoders written in managed C# for .NET 10 and .NET 11. No native library is loaded. Everything reads and writes spans, works on Linux, Windows and macOS, and is trim and Native AOT safe.
+Sound and video containers and decoders written in managed C# for .NET 10 and .NET 11. This package loads no native library. For system sound output and hardware video decoding, add [HyperCodecs.Platform](https://www.nuget.org/packages/HyperCodecs.Platform). Everything reads and writes spans, works on Linux, Windows and macOS, and is trim and Native AOT safe.
 
 HyperCodecs is part of the [Hyper PDF Viewer](https://github.com/glennawatson/HyperPDF) family and lives at [glennawatson/HyperCodecs](https://github.com/glennawatson/HyperCodecs).
 

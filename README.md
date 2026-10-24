@@ -1,6 +1,6 @@
 # HyperCodecs
 
-Sound and video containers and decoders written in managed C# for .NET 10 and .NET 11. No native library is loaded. Everything reads and writes spans, runs on Linux, Windows and macOS, and is safe to trim and compile ahead of time (Native AOT).
+Sound and video containers and decoders written in managed C# for .NET 10 and .NET 11. The `HyperCodecs` package loads no native library. Everything reads and writes spans, runs on Linux, Windows and macOS, and is safe to trim and compile ahead of time (Native AOT).
 
 [![Build](https://github.com/glennawatson/HyperCodecs/actions/workflows/ci.yml/badge.svg)](https://github.com/glennawatson/HyperCodecs/actions/workflows/ci.yml)
 
@@ -47,6 +47,20 @@ while (container.ReadPacket(packet))
 
 Video works the same way with `VideoDecoders.Create` and a `List<VideoFrame>` for the output. Give frames back with `VideoDecoder.Recycle` so the decoder can reuse their planes.
 
+## Sound output and hardware video
+
+The optional `HyperCodecs.Platform` package talks to the operating system. It loads each system library at run time, so a missing library or device is reported and the managed decoders stay as the fallback.
+
+```console
+dotnet add package HyperCodecs.Platform
+```
+
+| Part | Windows | macOS | Linux |
+|---|---|---|---|
+| Sound output (`IStreamingAudioOutput`) | WASAPI | Audio Toolbox | PulseAudio or PipeWire |
+| Hardware video (`PlatformVideoDecoders.Create`) | Media Foundation | VideoToolbox | VA-API |
+
+Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` uses the hardware first for large pictures and the managed decoder first for small ones.
 ## Build and test
 
 The repository needs the .NET 11 SDK. Everything builds for `net10.0` and `net11.0`.

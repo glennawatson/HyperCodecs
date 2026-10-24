@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="HyperCodecs/HyperCodecs.csproj" />
+    <Project Path="HyperCodecs.Platform/HyperCodecs.Platform.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HyperCodecs.Tests/HyperCodecs.Tests.csproj" />

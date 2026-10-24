@@ -37,6 +37,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HyperCodecs.Platform" />
     <InternalsVisibleTo Include="HyperCodecs.Tests" />
     <InternalsVisibleTo Include="HyperCodecs.Benchmarks" />
   </ItemGroup>

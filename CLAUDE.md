@@ -2,7 +2,7 @@
 
 - **Frozen collections are banned throughout this project.** Use `Dictionary` or `HashSet`, never `System.Collections.Frozen`, `FrozenDictionary`, `FrozenSet`, `ToFrozenDictionary`, or `ToFrozenSet`. The reusable library may run in a short-lived host. The global long-running-application exception does not apply here.
 
-HyperCodecs is a NuGet package of sound and video containers and decoders written in managed C# for Linux, Windows and macOS. It is the codec layer that [HyperPDF](https://github.com/glennawatson/HyperPDF) plays media with. The public package is `src/HyperCodecs`.
+HyperCodecs is a NuGet package of sound and video containers and decoders written in managed C# for Linux, Windows and macOS. It is the codec layer that [HyperPDF](https://github.com/glennawatson/HyperPDF) plays media with. There are two packages: `src/HyperCodecs` (managed decoders and containers) and `src/HyperCodecs.Platform` (operating system sound output and hardware video decoding).
 
 ## Standards
 
@@ -38,7 +38,8 @@ Write and check each decoder against its specification. The specifications are i
   - Use overloads, not optional parameters.
   - Braced switch sections.
   - Run `dotnet format analyzers --diagnostics <ids>` for mechanical fixes.
-- The library is managed C# only. Ask the owner before adding any native library or P/Invoke.
+- `HyperCodecs` is managed C# only. Native calls (P/Invoke) belong only in `HyperCodecs.Platform`, behind `OperatingSystem` checks, and load their system library at run time so a missing library or device returns a reason instead of throwing. Ask the owner before adding any other native library.
+- Give every `LibraryImport` a `DefaultDllImportSearchPaths` attribute.
 - Tests, committed scripts and docs never contain paths or assumptions specific to one machine (home folders, installed tools or profiles, local clones). Optional inputs come from an environment variable or PATH and skip with a reason when absent.
 - Follow the analyzers and existing C# style. Document members, name constants and use explicit enum values. Fix warnings; do not add suppressions.
 - Use .NET tools only. Use Roslyn for structural C# edits. Run single-file tools with `dotnet run --file`. Keep docs short. Add no attribution trailers or generated-by footers.
@@ -46,6 +47,7 @@ Write and check each decoder against its specification. The specifications are i
 ## Layout
 
 - `src/HyperCodecs` is the package. One folder per format: `Aac`, `Flac`, `H264`, `H265`, `Mp3`, `Mp4`, `Matroska`, `Ogg`, `Opus`, `Vorbis`, plus `Audio` (mixing and resampling), `Video` (colour conversion and scaling), `Bits`, `Checksums`, `Containers` and `Dsp`. `MediaContainers`, `AudioDecoders` and `VideoDecoders` are the entry points.
+- `src/HyperCodecs.Platform` is the second package. `Audio` has `IStreamingAudioOutput` and one folder per system (`Windows` WASAPI, `MacOS` Audio Toolbox, `Linux` PulseAudio). `Video` has `PlatformVideoDecoders` and one folder per system API (`MediaFoundation`, `VideoToolbox`, `VaApi`).
 - `src/tests/HyperCodecs.Tests` holds the tests. `Fixtures/` holds short files from independent encoders, each with the checksum of the expected output.
 - `src/benchmarks/HyperCodecs.Benchmarks` holds the BenchmarkDotNet benchmarks and the allocation harness. `HyperCodecs.Benchmarks.Generator` lists the benchmarks for the harness so no reflection is needed.
 - `src/tools` holds single-file C# tools; see its README.

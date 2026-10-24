@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
+    <ProjectReference Include="..\..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
   </ItemGroup>
 
   <!-- Lists the benchmarks for the allocation harness, so no reflection finds or calls them. -->
