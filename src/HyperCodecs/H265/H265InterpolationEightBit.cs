@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -51,10 +52,12 @@ internal static class H265InterpolationEightBit
         CheckReadable(reference.Length, ((first + area.Height - 1) * area.Stride) + Padded(width) - 1 + (taps.Length - 1));
         ref var origin = ref MemoryMarshal.GetReference(reference);
         ref var target = ref MemoryMarshal.GetReference(destination);
+        Span<Vector<short>> wideStore = stackalloc Vector<short>[H265InterpolationFilters.LumaTaps];
+        var wide = H265InterpolationWide.ShortTaps(taps, wideStore);
         for (var y = 0; y < area.Height; y++)
         {
             var row = (first + y) * area.Stride;
-            var x = 0;
+            var x = H265InterpolationWide.Sum(ref origin, row, 1, width, wide, ref Unsafe.Add(ref target, y * width));
             for (; x + Lanes <= width; x += Lanes)
             {
                 Sum(ref origin, row + x, 1, taps).StoreUnsafe(ref target, (nuint)((y * width) + x));
@@ -82,9 +85,11 @@ internal static class H265InterpolationEightBit
         CheckReadable(reference.Length, ((size.Height - 1 + taps.Length - 1) * stride) + Padded(width) - 1);
         ref var origin = ref MemoryMarshal.GetReference(reference);
         ref var target = ref MemoryMarshal.GetReference(destination);
+        Span<Vector<short>> wideStore = stackalloc Vector<short>[H265InterpolationFilters.LumaTaps];
+        var wide = H265InterpolationWide.ShortTaps(taps, wideStore);
         for (var y = 0; y < size.Height; y++)
         {
-            var x = 0;
+            var x = H265InterpolationWide.Sum(ref origin, y * stride, stride, width, wide, ref Unsafe.Add(ref target, y * width));
             for (; x + Lanes <= width; x += Lanes)
             {
                 Sum(ref origin, (y * stride) + x, stride, taps).StoreUnsafe(ref target, (nuint)((y * width) + x));
@@ -113,9 +118,11 @@ internal static class H265InterpolationEightBit
         CheckReadable(source.Length, ((size.Height - 1 + taps.Length - 1) * stride) + Padded(width) - 1);
         ref var origin = ref MemoryMarshal.GetReference(source);
         ref var target = ref MemoryMarshal.GetReference(destination);
+        Span<Vector<int>> wideStore = stackalloc Vector<int>[H265InterpolationFilters.LumaTaps];
+        var wide = H265InterpolationWide.IntTaps(taps, wideStore);
         for (var y = 0; y < size.Height; y++)
         {
-            var x = 0;
+            var x = H265InterpolationWide.Intermediate(ref origin, y * stride, stride, width, wide, shift, ref Unsafe.Add(ref target, y * width));
             for (; x + Lanes <= width; x += Lanes)
             {
                 Wide(ref origin, (y * stride) + x, stride, taps, shift).StoreUnsafe(ref target, (nuint)((y * width) + x));

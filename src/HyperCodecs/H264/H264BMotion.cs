@@ -197,10 +197,12 @@ internal sealed class H264BMotion
         {
             for (var c = 0; c < Half; c++)
             {
-                var column = _inference ? (group & 1) * Last : firstColumn + c;
-                var row = _inference ? (group >> 1) * Last : firstRow + r;
-                var col = Colocated(column, row);
-                block = _spatial ? SpatialBlock(col) : TemporalBlock(col);
+                // With direct 8x8 inference all four blocks of the group take the motion of the group's corner block, so it is worked out once.
+                if (!_inference || (r | c) == 0)
+                {
+                    block = DirectBlockAt(group, c, r);
+                }
+
                 WriteDirect(firstColumn + c, firstRow + r, block);
             }
         }
@@ -278,6 +280,19 @@ internal sealed class H264BMotion
         var vector0 = ref0 >= 0 ? _predict0.Predict(whole, ref0) : default;
         var vector1 = ref1 >= 0 ? _predict1.Predict(whole, ref1) : default;
         return new(ref0, ref1, vector0, vector1);
+    }
+
+    /// <summary>Works out the motion direct prediction gives a 4x4 block of an 8x8 group.</summary>
+    /// <param name="group">The group, 0 to 3.</param>
+    /// <param name="c">The block's column within the group.</param>
+    /// <param name="r">The block's row within the group.</param>
+    /// <returns>The motion.</returns>
+    private H264DirectBlock DirectBlockAt(int group, int c, int r)
+    {
+        var column = _inference ? (group & 1) * Last : ((group & 1) * Half) + c;
+        var row = _inference ? (group >> 1) * Last : ((group >> 1) * Half) + r;
+        var col = Colocated(column, row);
+        return _spatial ? SpatialBlock(col) : TemporalBlock(col);
     }
 
     /// <summary>Gives the motion of a block under spatial direct prediction.</summary>

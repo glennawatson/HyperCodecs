@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Numerics;
 using System.Runtime.Intrinsics;
 
 namespace HyperCodecs.H265;
@@ -66,6 +67,12 @@ internal static class H265Transform
     /// <param name="extent">The columns and rows that can hold coefficients.</param>
     private static void Columns(ReadOnlySpan<int> block, Span<int> scratch, int side, H265TransformTable table, H265BlockExtent extent)
     {
+        if (Vector.IsHardwareAccelerated && side >= Vector<int>.Count)
+        {
+            ColumnsWide(block, scratch, side, table, extent);
+            return;
+        }
+
         var round = Vector128.Create(1 << (FirstShift - 1));
         var low = Vector128.Create((int)short.MinValue);
         var high = Vector128.Create((int)short.MaxValue);
@@ -86,6 +93,61 @@ internal static class H265Transform
         }
     }
 
+    /// <summary>Transforms the columns in vectors as wide as the processor has, for blocks at least that wide.</summary>
+    /// <param name="block">The coefficients.</param>
+    /// <param name="scratch">Receives the intermediate values, row after row.</param>
+    /// <param name="side">The block side.</param>
+    /// <param name="table">The matrix.</param>
+    /// <param name="extent">The columns and rows that can hold coefficients.</param>
+    private static void ColumnsWide(ReadOnlySpan<int> block, Span<int> scratch, int side, H265TransformTable table, H265BlockExtent extent)
+    {
+        var lanes = Vector<int>.Count;
+        var round = new Vector<int>(1 << (FirstShift - 1));
+        var low = new Vector<int>(short.MinValue);
+        var high = new Vector<int>(short.MaxValue);
+        var groups = (extent.LastColumn / lanes) + 1;
+        for (var output = 0; output < side; output++)
+        {
+            for (var group = 0; group < groups; group++)
+            {
+                var x = group * lanes;
+                var sum = Vector<int>.Zero;
+                for (var j = 0; j <= extent.LastRow; j++)
+                {
+                    sum += new Vector<int>(table.Matrix[(j * table.Step * table.RowStride) + output]) * new Vector<int>(block.Slice((j * side) + x, lanes));
+                }
+
+                Vector.Min(Vector.Max(Vector.ShiftRightArithmetic(sum + round, FirstShift), low), high).CopyTo(scratch.Slice((output * side) + x, lanes));
+            }
+        }
+    }
+
+    /// <summary>Transforms the rows in vectors as wide as the processor has, for blocks at least that wide.</summary>
+    /// <param name="block">Receives the residual.</param>
+    /// <param name="scratch">The intermediate values.</param>
+    /// <param name="side">The block side.</param>
+    /// <param name="table">The matrix.</param>
+    /// <param name="lastColumn">The last column that holds values.</param>
+    /// <param name="shift">The right shift that scales the result.</param>
+    private static void RowsWide(Span<int> block, ReadOnlySpan<int> scratch, int side, H265TransformTable table, int lastColumn, int shift)
+    {
+        var lanes = Vector<int>.Count;
+        var round = new Vector<int>(1 << (shift - 1));
+        for (var y = 0; y < side; y++)
+        {
+            for (var output = 0; output < side; output += lanes)
+            {
+                var sum = Vector<int>.Zero;
+                for (var j = 0; j <= lastColumn; j++)
+                {
+                    sum += new Vector<int>(scratch[(y * side) + j]) * new Vector<int>(table.Matrix.Slice((j * table.Step * table.RowStride) + output, lanes));
+                }
+
+                Vector.ShiftRightArithmetic(sum + round, shift).CopyTo(block.Slice((y * side) + output, lanes));
+            }
+        }
+    }
+
     /// <summary>Transforms every row of the intermediate values, rounding and writing the residual back to the block.</summary>
     /// <param name="block">Receives the residual.</param>
     /// <param name="scratch">The intermediate values.</param>
@@ -95,6 +157,12 @@ internal static class H265Transform
     /// <param name="shift">The right shift that scales the result.</param>
     private static void Rows(Span<int> block, ReadOnlySpan<int> scratch, int side, H265TransformTable table, int lastColumn, int shift)
     {
+        if (Vector.IsHardwareAccelerated && side >= Vector<int>.Count)
+        {
+            RowsWide(block, scratch, side, table, lastColumn, shift);
+            return;
+        }
+
         var round = Vector128.Create(1 << (shift - 1));
         for (var y = 0; y < side; y++)
         {

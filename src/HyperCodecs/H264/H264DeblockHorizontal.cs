@@ -69,9 +69,6 @@ internal static class H264DeblockHorizontal
     /// <summary>The columns in a segment of a luma edge.</summary>
     private const int LumaColumnsPerSegment = 4;
 
-    /// <summary>The columns in a segment of a chroma edge.</summary>
-    private const int ChromaColumnsPerSegment = 2;
-
     /// <summary>The columns of a luma edge.</summary>
     private const int LumaColumns = 16;
 
@@ -119,39 +116,82 @@ internal static class H264DeblockHorizontal
         }
 
         ref var origin = ref MemoryMarshal.GetArrayDataReference(plane);
-        var thresholds = new Thresholds(Vector128.Create((short)limits.Alpha), Vector128.Create((short)limits.Beta));
-        Span<short> active = stackalloc short[Lanes];
-        Span<short> limitZero = stackalloc short[Lanes];
         for (var group = 0; group < columns / Lanes; group++)
         {
-            var at = start + (group * Lanes);
-            if (strengths[0] == StrongStrength)
-            {
-                Strong(ref origin, at, stride, thresholds, chroma);
-                continue;
-            }
-
-            FillLanes(strengths, group, chroma ? ChromaColumnsPerSegment : LumaColumnsPerSegment, limits.IndexA, active, limitZero);
-            Normal(ref origin, at, stride, thresholds, active, limitZero, chroma);
+            FilterGroup(ref origin, start + (group * Lanes), stride, new(strengths, group, limits, chroma));
         }
     }
 
-    /// <summary>Works out, for each of eight columns, whether its segment is filtered and its tc0.</summary>
+    /// <summary>Filters eight columns of an edge, or of an edge laid out like one: the samples across the edge a row apart.</summary>
+    /// <param name="origin">The first sample of the array that holds the samples.</param>
+    /// <param name="at">The index of q0 in the first of the eight columns.</param>
+    /// <param name="stride">The distance between the samples across the edge.</param>
+    /// <param name="group">The strengths of the edge's segments, which group of eight columns this is, the thresholds, and whether the plane is chroma.</param>
+    internal static void FilterGroup(ref byte origin, int at, int stride, H264EdgeGroup group)
+    {
+        var limits = group.Limits;
+        var thresholds = new Thresholds(Vector128.Create((short)limits.Alpha), Vector128.Create((short)limits.Beta));
+        if (group.Strengths[0] == StrongStrength)
+        {
+            Strong(ref origin, at, stride, thresholds, group.Chroma);
+            return;
+        }
+
+        var (active, limitZero) = group.Chroma ? ChromaLanes(group.Strengths, limits.IndexA) : LumaLanes(group.Strengths, group.Index, limits.IndexA);
+        Normal(ref origin, at, stride, thresholds, active, limitZero, group.Chroma);
+    }
+
+    /// <summary>Works out, for the eight columns of a luma group, whether their segment is filtered and its tc0: each of the two segments covers four columns.</summary>
     /// <param name="strengths">The boundary strengths of the four segments.</param>
     /// <param name="group">Which group of eight columns.</param>
-    /// <param name="columnsPerSegment">The columns in a segment: four for luma, two for chroma.</param>
     /// <param name="indexA">The index into the tc0 table.</param>
-    /// <param name="active">Receives -1 for a column whose segment has a non-zero strength, otherwise 0.</param>
-    /// <param name="limitZero">Receives the tc0 of each column.</param>
-    private static void FillLanes(ReadOnlySpan<int> strengths, int group, int columnsPerSegment, int indexA, Span<short> active, Span<short> limitZero)
+    /// <returns>-1 in each column whose segment has a non-zero strength, and the tc0 of each column.</returns>
+    private static LaneLimits LumaLanes(ReadOnlySpan<int> strengths, int group, int indexA)
     {
-        for (var lane = 0; lane < Lanes; lane++)
-        {
-            var strength = strengths[(group * (Lanes / columnsPerSegment)) + (lane / columnsPerSegment)];
-            active[lane] = (short)(strength > 0 ? -1 : 0);
-            limitZero[lane] = strength > 0 ? H264DeblockTables.TcZero[((strength - 1) * H264DeblockTables.IndexCount) + indexA] : (short)0;
-        }
+        var first = group * (Lanes / LumaColumnsPerSegment);
+        var strengthA = strengths[first];
+        var strengthB = strengths[first + 1];
+        var activeA = ActiveOf(strengthA);
+        var activeB = ActiveOf(strengthB);
+        var zeroA = TcOf(strengthA, indexA);
+        var zeroB = TcOf(strengthB, indexA);
+        return new(
+            Vector128.Create(activeA, activeA, activeA, activeA, activeB, activeB, activeB, activeB),
+            Vector128.Create(zeroA, zeroA, zeroA, zeroA, zeroB, zeroB, zeroB, zeroB));
     }
+
+    /// <summary>Works out, for the eight columns of a chroma edge, whether their segment is filtered and its tc0: each of the four segments covers two columns.</summary>
+    /// <param name="strengths">The boundary strengths of the four segments.</param>
+    /// <param name="indexA">The index into the tc0 table.</param>
+    /// <returns>-1 in each column whose segment has a non-zero strength, and the tc0 of each column.</returns>
+    private static LaneLimits ChromaLanes(ReadOnlySpan<int> strengths, int indexA)
+    {
+        var activeA = ActiveOf(strengths[0]);
+        var activeB = ActiveOf(strengths[1]);
+        var activeC = ActiveOf(strengths[2]);
+        var activeD = ActiveOf(strengths[3]);
+        var zeroA = TcOf(strengths[0], indexA);
+        var zeroB = TcOf(strengths[1], indexA);
+        var zeroC = TcOf(strengths[2], indexA);
+        var zeroD = TcOf(strengths[3], indexA);
+        return new(
+            Vector128.Create(activeA, activeA, activeB, activeB, activeC, activeC, activeD, activeD),
+            Vector128.Create(zeroA, zeroA, zeroB, zeroB, zeroC, zeroC, zeroD, zeroD));
+    }
+
+    /// <summary>Gives -1 for a segment that is filtered, otherwise 0.</summary>
+    /// <param name="strength">The boundary strength.</param>
+    /// <returns>The lane mask value.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static short ActiveOf(int strength) => (short)(strength > 0 ? -1 : 0);
+
+    /// <summary>Gives tc0 for a segment that is filtered, otherwise 0.</summary>
+    /// <param name="strength">The boundary strength.</param>
+    /// <param name="indexA">The index into the tc0 table.</param>
+    /// <returns>The tc0.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static short TcOf(int strength, int indexA) =>
+        strength > 0 ? H264DeblockTables.TcZero[((strength - 1) * H264DeblockTables.IndexCount) + indexA] : (short)0;
 
     /// <summary>Filters eight columns with a boundary strength below 4 (clause 8.7.2.3).</summary>
     /// <param name="origin">The first sample of the plane.</param>
@@ -161,7 +201,7 @@ internal static class H264DeblockHorizontal
     /// <param name="active">Which columns are filtered.</param>
     /// <param name="limitZero">The tc0 of each column.</param>
     /// <param name="chroma">Whether the plane is chroma.</param>
-    private static void Normal(ref byte origin, int at, int stride, Thresholds limits, ReadOnlySpan<short> active, ReadOnlySpan<short> limitZero, bool chroma)
+    private static void Normal(ref byte origin, int at, int stride, Thresholds limits, Vector128<short> active, Vector128<short> limitZero, bool chroma)
     {
         var p1 = Load(ref origin, at - (RowsToP1 * stride));
         var p0 = Load(ref origin, at - stride);
@@ -170,8 +210,8 @@ internal static class H264DeblockHorizontal
         var mask = Vector128.LessThan(Vector128.Abs(p0 - q0), limits.Alpha)
             & Vector128.LessThan(Vector128.Abs(p1 - p0), limits.Beta)
             & Vector128.LessThan(Vector128.Abs(q1 - q0), limits.Beta)
-            & Vector128.Create(active);
-        var tc0 = Vector128.Create(limitZero);
+            & active;
+        var tc0 = limitZero;
         var tc = tc0 - Vector128<short>.AllBitsSet;
         var p2 = Vector128<short>.Zero;
         var q2 = Vector128<short>.Zero;
@@ -277,4 +317,9 @@ internal static class H264DeblockHorizontal
     /// <param name="Alpha">Alpha.</param>
     /// <param name="Beta">Beta.</param>
     private readonly record struct Thresholds(Vector128<short> Alpha, Vector128<short> Beta);
+
+    /// <summary>What the normal filter needs to know about each of eight columns.</summary>
+    /// <param name="Active">-1 in a column whose segment is filtered, otherwise 0.</param>
+    /// <param name="LimitZero">The tc0 of each column.</param>
+    private readonly record struct LaneLimits(Vector128<short> Active, Vector128<short> LimitZero);
 }

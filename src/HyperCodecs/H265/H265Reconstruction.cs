@@ -2,6 +2,8 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.Intrinsics;
+
 namespace HyperCodecs.H265;
 
 /// <summary>Turns the coefficient levels of a block into residual samples and adds them to the prediction already in the picture (8.6.2, 8.6.5 and 8.6.7).</summary>
@@ -18,6 +20,12 @@ internal static class H265Reconstruction
 
     /// <summary>The shift of a skipped transform block, before the size term.</summary>
     private const int SkipShiftBase = 5;
+
+    /// <summary>The 16 bit samples in a 128 bit vector.</summary>
+    private const int Lanes = 8;
+
+    /// <summary>The 32 bit values in a 128 bit vector.</summary>
+    private const int HalfLanes = 4;
 
     /// <summary>Adds the residual of a block to the picture and clears the coefficient array.</summary>
     /// <param name="context">The slice context.</param>
@@ -142,10 +150,27 @@ internal static class H265Reconstruction
         var plane = picture.PlaneOf(component);
         var stride = picture.StrideOf(component);
         var maximum = (1 << bitDepth) - 1;
+        var limit = Vector128.Create(maximum);
         for (var row = 0; row < area.Height; row++)
         {
             var offset = ((area.Y + row) * stride) + area.X;
-            for (var column = 0; column < area.Width; column++)
+            var column = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var target = plane.AsSpan(offset, area.Width);
+                var source = residual.Slice(row * area.Width, area.Width);
+                for (; column + Lanes <= area.Width; column += Lanes)
+                {
+                    var samples = Vector128.Create((ReadOnlySpan<ushort>)target.Slice(column, Lanes));
+                    var low = Vector128.WidenLower(samples).AsInt32() + Vector128.Create(source.Slice(column, HalfLanes));
+                    var high = Vector128.WidenUpper(samples).AsInt32() + Vector128.Create(source.Slice(column + HalfLanes, HalfLanes));
+                    low = Vector128.Min(Vector128.Max(low, Vector128<int>.Zero), limit);
+                    high = Vector128.Min(Vector128.Max(high, Vector128<int>.Zero), limit);
+                    Vector128.Narrow(low.AsUInt32(), high.AsUInt32()).CopyTo(target.Slice(column, Lanes));
+                }
+            }
+
+            for (; column < area.Width; column++)
             {
                 plane[offset + column] = (ushort)Math.Clamp(plane[offset + column] + residual[(row * area.Width) + column], 0, maximum);
             }

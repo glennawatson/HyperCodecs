@@ -2,6 +2,8 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using HyperCodecs.H264;
@@ -227,19 +229,21 @@ internal static class H265Sao
         var area = block.Area;
         var from = area.X;
         var to = area.X + area.Width;
-
-        // Samples that are not on the edge of the block have both neighbours in the block, so the vector path can take them without any checks.
-        var interior = limits.Vector && y > area.Y && y < area.Y + area.Height - 1;
-        if (interior)
+        if (limits.Vector)
         {
-            from++;
-            to--;
-            var vectorEnd = from + ((to - from) & ~(ShortLanes - 1));
+            // A sample is left alone when a neighbour may not be used. The neighbours of the samples between the ends of the row lie in the same column of
+            // blocks, so they are all usable or none is, and only the two ends can differ.
+            if (!Usable(block, allowed, new(area.X + 1, y), neighbours))
+            {
+                return;
+            }
+
+            from += Usable(block, allowed, new(from, y), neighbours) ? 0 : 1;
+            to -= Usable(block, allowed, new(to - 1, y), neighbours) ? 0 : 1;
+            var count = (to - from) & ~(ShortLanes - 1);
             var plane = block.PlaneWidth;
-            EdgeRun(block, new((neighbours.Vertical0 * plane) + neighbours.Horizontal0, (neighbours.Vertical1 * plane) + neighbours.Horizontal1), offsets, (y * plane) + from, vectorEnd - from);
-            from = vectorEnd;
-            EdgeSample(context, block, allowed, new(area.X, y), neighbours, offsets, limits);
-            EdgeSample(context, block, allowed, new(to, y), neighbours, offsets, limits);
+            EdgeRun(block, new((neighbours.Vertical0 * plane) + neighbours.Horizontal0, (neighbours.Vertical1 * plane) + neighbours.Horizontal1), offsets, (y * plane) + from, count);
+            from += count;
         }
 
         for (var x = from; x < to; x++)
@@ -247,6 +251,16 @@ internal static class H265Sao
             EdgeSample(context, block, allowed, new(x, y), neighbours, offsets, limits);
         }
     }
+
+    /// <summary>Tells whether both neighbours of a sample may be used.</summary>
+    /// <param name="block">The block.</param>
+    /// <param name="allowed">Whether each of the 3x3 coding tree blocks around the block may be used.</param>
+    /// <param name="at">The sample's column and row.</param>
+    /// <param name="neighbours">The column and row distance from a sample to each of its two neighbours.</param>
+    /// <returns><see langword="true"/> when the sample can be filtered.</returns>
+    private static bool Usable(in H265SaoBlock block, ReadOnlySpan<bool> allowed, SamplePlace at, H265SaoNeighbours neighbours) =>
+        Neighbour(block, allowed, at.Column + neighbours.Horizontal0, at.Row + neighbours.Vertical0)
+        && Neighbour(block, allowed, at.Column + neighbours.Horizontal1, at.Row + neighbours.Vertical1);
 
     /// <summary>Applies edge offset to one sample, checking that both neighbours may be used.</summary>
     /// <param name="context">The slice context.</param>
@@ -302,7 +316,8 @@ internal static class H265Sao
         var stepUp = Vector128.Create((short)offsets[2]);
         var peak = Vector128.Create((short)offsets[3]);
         var maximum = Vector128.Create((short)((1 << block.BitDepth) - 1));
-        for (var index = start; index < start + count; index += ShortLanes)
+        var done = EdgeRunWide(block, steps, offsets, start, count);
+        for (var index = start + done; index < start + count; index += ShortLanes)
         {
             var centre = Vector128.Create(source.Slice(index, ShortLanes));
             var first = Vector128.Create(source.Slice(index + steps.First, ShortLanes));
@@ -316,6 +331,54 @@ internal static class H265Sao
             offset = Vector128.ConditionalSelect(Vector128.Equals(sum, Vector128.Create(PeakSum)), peak, offset);
             Vector128.Min(Vector128.Max(centre + offset, Vector128<short>.Zero), maximum).CopyTo(target.Slice(index, ShortLanes));
         }
+    }
+
+    /// <summary>Applies edge offset to as many whole wide vectors of a run of samples as fit; the 128 bit loop of <see cref="EdgeRun"/> does the rest.</summary>
+    /// <param name="block">The block.</param>
+    /// <param name="steps">The distance in the plane from a sample to each of its two neighbours.</param>
+    /// <param name="offsets">The four offsets: valley, step, step, peak.</param>
+    /// <param name="start">The index in the plane of the first sample.</param>
+    /// <param name="count">The number of samples.</param>
+    /// <returns>The number of samples done.</returns>
+    private static int EdgeRunWide(in H265SaoBlock block, H265SaoSteps steps, ReadOnlySpan<int> offsets, int start, int count)
+    {
+        var lanes = Vector<short>.Count;
+        var done = 0;
+        if (!Vector.IsHardwareAccelerated || lanes <= ShortLanes)
+        {
+            return done;
+        }
+
+        ref var source = ref Unsafe.As<ushort, short>(ref MemoryMarshal.GetArrayDataReference(block.Source));
+        ref var target = ref Unsafe.As<ushort, short>(ref MemoryMarshal.GetArrayDataReference(block.Target));
+        var valley = new Vector<short>((short)offsets[0]);
+        var stepDown = new Vector<short>((short)offsets[1]);
+        var stepUp = new Vector<short>((short)offsets[2]);
+        var peak = new Vector<short>((short)offsets[3]);
+        var maximum = new Vector<short>((short)((1 << block.BitDepth) - 1));
+        var valleySum = new Vector<short>(ValleySum);
+        var peakSum = new Vector<short>(PeakSum);
+        var minusOne = -Vector<short>.One;
+        if (start + steps.First < 0 || start + steps.Second < 0 || start + count + Math.Max(steps.First, steps.Second) + lanes > block.Source.Length)
+        {
+            return done;
+        }
+
+        for (; done + lanes <= count; done += lanes)
+        {
+            var index = (nuint)(start + done);
+            var centre = Vector.LoadUnsafe(ref source, index);
+            var first = Vector.LoadUnsafe(ref source, (nuint)(start + done + steps.First));
+            var second = Vector.LoadUnsafe(ref source, (nuint)(start + done + steps.Second));
+            var sum = Vector.LessThan(centre, first) - Vector.GreaterThan(centre, first) + Vector.LessThan(centre, second) - Vector.GreaterThan(centre, second);
+            var offset = Vector.ConditionalSelect(Vector.Equals(sum, valleySum), valley, Vector<short>.Zero);
+            offset = Vector.ConditionalSelect(Vector.Equals(sum, minusOne), stepDown, offset);
+            offset = Vector.ConditionalSelect(Vector.Equals(sum, Vector<short>.One), stepUp, offset);
+            offset = Vector.ConditionalSelect(Vector.Equals(sum, peakSum), peak, offset);
+            Vector.StoreUnsafe(Vector.Min(Vector.Max(centre + offset, Vector<short>.Zero), maximum), ref target, index);
+        }
+
+        return done;
     }
 
     /// <summary>Applies band offset to a run of samples, eight at a time.</summary>

@@ -16,6 +16,9 @@ namespace HyperCodecs;
 /// </summary>
 internal ref struct CabacEngine
 {
+    /// <summary>The mask of a context byte (a state of 0 to 63 and the more probable symbol), which keeps the table lookups inside their tables without a bounds check.</summary>
+    private const int ContextMask = 0x7F;
+
     /// <summary>The bits of codIOffset at the start.</summary>
     private const int OffsetBits = 9;
 
@@ -111,7 +114,7 @@ internal ref struct CabacEngine
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int DecodeDecision(int ctxIdx)
     {
-        int context = _contexts[ctxIdx];
+        var context = _contexts[ctxIdx] & ContextMask;
         var rangeLps = CabacTables.RangeLps[((context >> RowShift) << RowEntriesShift) + ((_range >> RangeIndexShift) & RangeIndexMask)];
         _range -= rangeLps;
         var scaled = (ulong)_range << _extra;
