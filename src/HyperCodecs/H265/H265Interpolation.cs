@@ -2,11 +2,17 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+
 namespace HyperCodecs.H265;
 
 /// <summary>Interpolates fractional sample positions of a reference block to the 14 bit intermediate precision the weighted prediction takes (8.5.3.3.3).</summary>
 internal static class H265Interpolation
 {
+    /// <summary>The number of 32 bit values in a 128 bit vector.</summary>
+    private const int Lanes = 4;
+
     /// <summary>The intermediate bit depth.</summary>
     private const int IntermediateBits = 14;
 
@@ -110,7 +116,16 @@ internal static class H265Interpolation
         for (var y = 0; y < height; y++)
         {
             var source = ((y + before) * stride) + before;
-            for (var x = 0; x < width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                for (; x + Lanes <= width; x += Lanes)
+                {
+                    Store(Vector128.ShiftLeft(Widen(reference, source + x), shift), destination, (y * width) + x);
+                }
+            }
+
+            for (; x < width; x++)
             {
                 destination[(y * width) + x] = (short)(reference[source + x] << shift);
             }
@@ -130,7 +145,22 @@ internal static class H265Interpolation
         for (var y = 0; y < area.Height; y++)
         {
             var source = (first + y) * area.Stride;
-            for (var x = 0; x < width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                for (; x + Lanes <= width; x += Lanes)
+                {
+                    var sum = Vector128<int>.Zero;
+                    for (var k = 0; k < taps.Length; k++)
+                    {
+                        sum += Vector128.Create((int)taps[k]) * Widen(reference, source + x + k);
+                    }
+
+                    Store(Vector128.ShiftRightArithmetic(sum, shift), destination, (y * width) + x);
+                }
+            }
+
+            for (; x < width; x++)
             {
                 var sum = 0;
                 for (var k = 0; k < taps.Length; k++)
@@ -155,7 +185,22 @@ internal static class H265Interpolation
     {
         for (var y = 0; y < height; y++)
         {
-            for (var x = 0; x < width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                for (; x + Lanes <= width; x += Lanes)
+                {
+                    var sum = Vector128<int>.Zero;
+                    for (var k = 0; k < taps.Length; k++)
+                    {
+                        sum += Vector128.Create((int)taps[k]) * Widen(source, ((y + k) * stride) + x);
+                    }
+
+                    Store(Vector128.ShiftRightArithmetic(sum, shift), destination, (y * width) + x);
+                }
+            }
+
+            for (; x < width; x++)
             {
                 var sum = 0;
                 for (var k = 0; k < taps.Length; k++)
@@ -180,7 +225,22 @@ internal static class H265Interpolation
     {
         for (var y = 0; y < height; y++)
         {
-            for (var x = 0; x < width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                for (; x + Lanes <= width; x += Lanes)
+                {
+                    var sum = Vector128<int>.Zero;
+                    for (var k = 0; k < taps.Length; k++)
+                    {
+                        sum += Vector128.Create((int)taps[k]) * Widen(source, ((y + k) * stride) + x);
+                    }
+
+                    Store(Vector128.ShiftRightArithmetic(sum, shift), destination, (y * width) + x);
+                }
+            }
+
+            for (; x < width; x++)
             {
                 var sum = 0;
                 for (var k = 0; k < taps.Length; k++)
@@ -192,4 +252,28 @@ internal static class H265Interpolation
             }
         }
     }
+
+    /// <summary>Loads four unsigned samples as 32 bit values.</summary>
+    /// <param name="samples">The samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Widen(ReadOnlySpan<ushort> samples, int index) =>
+        Vector128.WidenLower(Vector64.Create(samples.Slice(index, Lanes)).ToVector128Unsafe()).AsInt32();
+
+    /// <summary>Loads four signed samples as 32 bit values.</summary>
+    /// <param name="samples">The samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Widen(ReadOnlySpan<short> samples, int index) =>
+        Vector128.WidenLower(Vector64.Create(samples.Slice(index, Lanes)).ToVector128Unsafe());
+
+    /// <summary>Stores four values as 16 bit samples, keeping the low 16 bits of each.</summary>
+    /// <param name="values">The values.</param>
+    /// <param name="destination">Receives the samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Store(Vector128<int> values, Span<short> destination, int index) =>
+        Vector128.Narrow(values, values).GetLower().CopyTo(destination.Slice(index, Lanes));
 }

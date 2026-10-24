@@ -18,7 +18,7 @@ internal static class H265RefListBuilder
         context.RefList1.Clear();
         if (header.SliceType != H265SliceType.I)
         {
-            var total = set.StCurrBefore.Length + set.StCurrAfter.Length + set.LtCurr.Length;
+            var total = set.StCurrBefore.Count + set.StCurrAfter.Count + set.LtCurr.Count;
             if (total == 0)
             {
                 throw new InvalidDataException("An H.265 inter slice has no reference pictures.");
@@ -32,7 +32,7 @@ internal static class H265RefListBuilder
         }
 
         context.NoBackwardPred = IsNoBackward(context);
-        context.Picture.SliceRefs.Add(Describe(context));
+        context.Picture.NextSliceRefs().Set(context.RefList0, context.RefList1);
     }
 
     /// <summary>Tells whether every reference picture of the slice comes before the current picture or at the same time in output order.</summary>
@@ -67,9 +67,9 @@ internal static class H265RefListBuilder
     /// <param name="first">The group that comes first.</param>
     /// <param name="second">The group that comes second.</param>
     /// <param name="longTerm">The long-term group.</param>
-    private static void BuildList(H265SliceContext context, List<H265Picture> list, H265ListShape shape, H265Picture[] first, H265Picture[] second, H265Picture[] longTerm)
+    private static void BuildList(H265SliceContext context, List<H265Picture> list, H265ListShape shape, List<H265Picture> first, List<H265Picture> second, List<H265Picture> longTerm)
     {
-        var length = Math.Max(shape.Count, first.Length + second.Length + longTerm.Length);
+        var length = Math.Max(shape.Count, first.Count + second.Count + longTerm.Count);
         var initial = context.RefInitial;
         initial.Clear();
         while (initial.Count < length)
@@ -89,45 +89,11 @@ internal static class H265RefListBuilder
     /// <param name="target">The initial list.</param>
     /// <param name="length">The length the initial list grows to.</param>
     /// <param name="group">The group.</param>
-    private static void Append(List<H265Picture> target, int length, H265Picture[] group)
+    private static void Append(List<H265Picture> target, int length, List<H265Picture> group)
     {
-        for (var i = 0; i < group.Length && target.Count < length; i++)
+        for (var i = 0; i < group.Count && target.Count < length; i++)
         {
             target.Add(group[i]);
         }
-    }
-
-    /// <summary>Describes the lists as order counts and long-term flags, which later pictures need to follow the motion.</summary>
-    /// <param name="context">The slice context.</param>
-    /// <returns>The description.</returns>
-    private static H265SliceRefs Describe(H265SliceContext context) =>
-        new(PocsOf(context.RefList0), LongTermFlagsOf(context.RefList0), PocsOf(context.RefList1), LongTermFlagsOf(context.RefList1));
-
-    /// <summary>Lists the picture order counts of a reference list.</summary>
-    /// <param name="list">The list.</param>
-    /// <returns>The counts.</returns>
-    private static int[] PocsOf(List<H265Picture> list)
-    {
-        var pocs = new int[list.Count];
-        for (var i = 0; i < pocs.Length; i++)
-        {
-            pocs[i] = list[i].Poc;
-        }
-
-        return pocs;
-    }
-
-    /// <summary>Flags which pictures of a reference list are long-term references.</summary>
-    /// <param name="list">The list.</param>
-    /// <returns>The flags.</returns>
-    private static bool[] LongTermFlagsOf(List<H265Picture> list)
-    {
-        var flags = new bool[list.Count];
-        for (var i = 0; i < flags.Length; i++)
-        {
-            flags[i] = list[i].IsLongTerm;
-        }
-
-        return flags;
     }
 }

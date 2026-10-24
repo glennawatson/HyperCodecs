@@ -40,8 +40,35 @@ internal sealed class H264Dpb
     /// <summary>The frames marked as used for reference, short-term and long-term.</summary>
     private readonly List<H264RefPicture> _frames = [];
 
+    /// <summary>The short-term frames before the current picture, kept between slices so building a list allocates nothing.</summary>
+    private readonly List<H264RefPicture> _before = [];
+
+    /// <summary>The short-term frames after the current picture.</summary>
+    private readonly List<H264RefPicture> _after = [];
+
+    /// <summary>The long-term frames.</summary>
+    private readonly List<H264RefPicture> _longTerm = [];
+
+    /// <summary>The initial list 0.</summary>
+    private readonly List<H264RefPicture> _initial0 = [];
+
+    /// <summary>The initial list 1.</summary>
+    private readonly List<H264RefPicture> _initial1 = [];
+
     /// <summary>The largest long-term frame index, or -1 when there are no long-term indices.</summary>
     private int _maxLongTermFrameIdx = -1;
+
+    /// <summary>The working array of list 0.</summary>
+    private H264RefPicture?[]? _work0;
+
+    /// <summary>The working array of list 1.</summary>
+    private H264RefPicture?[]? _work1;
+
+    /// <summary>The finished list 0.</summary>
+    private H264RefPicture[]? _result0;
+
+    /// <summary>The finished list 1.</summary>
+    private H264RefPicture[]? _result1;
 
     /// <summary>Gets the number of reference frames.</summary>
     internal int Count => _frames.Count;
@@ -83,7 +110,8 @@ internal sealed class H264Dpb
         var currentFrameNum = header.Picture.FrameNum;
         UpdateWraps(currentFrameNum, maxFrameNum);
         var count = header.Refs.NumRefIdxL0;
-        var initial = new List<H264RefPicture>(_frames.Count);
+        var initial = _initial0;
+        initial.Clear();
         foreach (var frame in _frames)
         {
             if (!frame.IsLongTerm)
@@ -93,7 +121,8 @@ internal sealed class H264Dpb
         }
 
         initial.Sort(static (a, b) => b.FrameNumWrap.CompareTo(a.FrameNumWrap));
-        var longTerm = new List<H264RefPicture>();
+        var longTerm = _longTerm;
+        longTerm.Clear();
         foreach (var frame in _frames)
         {
             if (frame.IsLongTerm)
@@ -104,14 +133,9 @@ internal sealed class H264Dpb
 
         longTerm.Sort(static (a, b) => a.LongTermFrameIdx.CompareTo(b.LongTermFrameIdx));
         initial.AddRange(longTerm);
-        var list = new H264RefPicture?[count + 1];
-        for (var index = 0; index < Math.Min(count, initial.Count); index++)
-        {
-            list[index] = initial[index];
-        }
-
+        var list = FillList(ref _work0, initial, count);
         Modify(list, header.Refs.ModificationsL0, count, currentFrameNum, maxFrameNum);
-        return Complete(list, count);
+        return Complete(ref _result0, list, count);
     }
 
     /// <summary>Builds both reference lists of a B slice from picture order counts (clause 8.2.4.2.3).</summary>
@@ -125,9 +149,12 @@ internal sealed class H264Dpb
         var maxFrameNum = 1 << sps.Log2MaxFrameNum;
         var currentFrameNum = header.Picture.FrameNum;
         UpdateWraps(currentFrameNum, maxFrameNum);
-        var before = new List<H264RefPicture>();
-        var after = new List<H264RefPicture>();
-        var longTerm = new List<H264RefPicture>();
+        var before = _before;
+        var after = _after;
+        var longTerm = _longTerm;
+        before.Clear();
+        after.Clear();
+        longTerm.Clear();
         foreach (var frame in _frames)
         {
             if (frame.IsLongTerm)
@@ -147,8 +174,16 @@ internal sealed class H264Dpb
         before.Sort(static (a, b) => b.Picture.Poc.CompareTo(a.Picture.Poc));
         after.Sort(static (a, b) => a.Picture.Poc.CompareTo(b.Picture.Poc));
         longTerm.Sort(static (a, b) => a.LongTermFrameIdx.CompareTo(b.LongTermFrameIdx));
-        var initial0 = new List<H264RefPicture>([.. before, .. after, .. longTerm]);
-        var initial1 = new List<H264RefPicture>([.. after, .. before, .. longTerm]);
+        var initial0 = _initial0;
+        var initial1 = _initial1;
+        initial0.Clear();
+        initial1.Clear();
+        initial0.AddRange(before);
+        initial0.AddRange(after);
+        initial0.AddRange(longTerm);
+        initial1.AddRange(after);
+        initial1.AddRange(before);
+        initial1.AddRange(longTerm);
         if (initial1.Count > 1 && SameOrder(initial0, initial1))
         {
             var first = initial1[0];
@@ -158,11 +193,11 @@ internal sealed class H264Dpb
 
         var count0 = header.Refs.NumRefIdxL0;
         var count1 = header.Refs.NumRefIdxL1;
-        var list0 = FillList(initial0, count0);
-        var list1 = FillList(initial1, count1);
+        var list0 = FillList(ref _work0, initial0, count0);
+        var list1 = FillList(ref _work1, initial1, count1);
         Modify(list0, header.Refs.ModificationsL0, count0, currentFrameNum, maxFrameNum);
         Modify(list1, header.Refs.ModificationsL1, count1, currentFrameNum, maxFrameNum);
-        return new(Complete(list0, count0), Complete(list1, count1));
+        return new(Complete(ref _result0, list0, count0), Complete(ref _result1, list1, count1));
     }
 
     /// <summary>Marks the frame just decoded and adds it to the reference frames when it is a reference (clause 8.2.5).</summary>
@@ -204,12 +239,14 @@ internal sealed class H264Dpb
     }
 
     /// <summary>Copies the start of an initial list into a list one place longer than the slice says.</summary>
+    /// <param name="cache">The array kept from the last slice, which is used again when it is the right length.</param>
     /// <param name="initial">The initial list.</param>
     /// <param name="count">The length the slice asks for.</param>
     /// <returns>The list, with a spare place at the end for the modification commands.</returns>
-    private static H264RefPicture?[] FillList(List<H264RefPicture> initial, int count)
+    private static H264RefPicture?[] FillList(ref H264RefPicture?[]? cache, List<H264RefPicture> initial, int count)
     {
-        var list = new H264RefPicture?[count + 1];
+        var list = cache is { } kept && kept.Length == count + 1 ? kept : (cache = new H264RefPicture?[count + 1]);
+        Array.Clear(list);
         for (var index = 0; index < Math.Min(count, initial.Count); index++)
         {
             list[index] = initial[index];
@@ -284,14 +321,15 @@ internal sealed class H264Dpb
     }
 
     /// <summary>Takes the finished list, filling places that no frame reaches.</summary>
+    /// <param name="cache">The array kept from the last slice, which is used again when it is the right length. The slice decoder only holds the result while it decodes the slice.</param>
     /// <param name="list">The list, one place longer than <paramref name="count"/>.</param>
     /// <param name="count">The length of the list.</param>
     /// <returns>The list.</returns>
     /// <exception cref="InvalidDataException">There is no frame at all to refer to.</exception>
-    private static H264RefPicture[] Complete(H264RefPicture?[] list, int count)
+    private static H264RefPicture[] Complete(ref H264RefPicture[]? cache, H264RefPicture?[] list, int count)
     {
         var first = list[0] ?? throw new InvalidDataException("An H.264 inter slice has no reference frame.");
-        var result = new H264RefPicture[count];
+        var result = cache is { } kept && kept.Length == count ? kept : (cache = new H264RefPicture[count]);
         for (var index = 0; index < count; index++)
         {
             result[index] = list[index] ?? first;

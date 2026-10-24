@@ -8,8 +8,8 @@ using HyperCodecs.Platform.Video;
 namespace HyperCodecs.Benchmarks;
 
 /// <summary>
-/// Decodes the same files with the C# decoder and with the decoder the system provides (the graphics hardware where there is one), keeping the
-/// decoder from run to run so the cost of starting it is not counted. Set HYPERCODECS_BIG_CLIPS to a folder holding larger H.264 or H.265 files
+/// Decodes the same files with the C# decoder and with the decoder the system provides (the graphics hardware where there is one, whatever the
+/// picture size), keeping the decoder from run to run so the cost of starting it is not counted. Set HYPERCODECS_BIG_CLIPS to a folder holding larger H.264 or H.265 files
 /// to measure them too.
 /// </summary>
 public class HyperCodecsPlatformVideoDecodeBenchmarks
@@ -110,7 +110,7 @@ public class HyperCodecsPlatformVideoDecodeBenchmarks
     /// <summary>Makes the decoder this system provides: Linux has its own package, the other systems their own target framework.</summary>
     /// <param name="track">The picture track.</param>
     /// <returns>The decoder, or <see langword="null"/>.</returns>
-    private static VideoDecoder? CreateSystem(MediaTrack track) => OperatingSystem.IsLinux() ? LinuxVideoDecoders.Create(track) : PlatformVideoDecoders.Create(track);
+    private static VideoDecoder? CreateSystem(MediaTrack track) => OperatingSystem.IsLinux() ? LinuxVideoDecoders.TryCreate(track, out _) : PlatformVideoDecoders.TryCreateNative(track, out _);
 
     /// <summary>Hands the pictures back to the decoder, as the player does once it has shown them.</summary>
     /// <param name="decoder">The decoder.</param>

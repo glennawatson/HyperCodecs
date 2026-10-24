@@ -16,20 +16,15 @@ internal sealed class H265SliceContext
     /// <summary>The Rice parameter states kept for persistent adaptation.</summary>
     private const int StatCoeffCount = 4;
 
-    /// <summary>Initializes a new instance of the <see cref="H265SliceContext"/> class.</summary>
-    /// <param name="sps">The sequence parameter set.</param>
-    /// <param name="pps">The picture parameter set.</param>
-    /// <param name="layout">The picture layout.</param>
-    /// <param name="picture">The picture being decoded.</param>
+    /// <summary>Initializes a new instance of the <see cref="H265SliceContext"/> class. The decoder makes one and starts it again for each picture.</summary>
     /// <param name="prediction">The work areas of inter prediction, which the decoder keeps from picture to picture.</param>
-    /// <param name="saoSource">A work area at least as long as the luma plane, which the decoder keeps from picture to picture.</param>
-    internal H265SliceContext(H265Sps sps, H265Pps pps, H265PictureLayout layout, H265Picture picture, H265PredictionBuffers prediction, ushort[] saoSource)
+    internal H265SliceContext(H265PredictionBuffers prediction)
     {
-        SaoSource = saoSource;
-        Sps = sps;
-        Pps = pps;
-        Layout = layout;
-        Picture = picture;
+        SaoSource = [];
+        Sps = null!;
+        Pps = null!;
+        Layout = null!;
+        Picture = null!;
         Header = null!;
         Contexts = new byte[H265CabacContexts.Count];
         StatCoeff = new int[StatCoeffCount];
@@ -44,19 +39,19 @@ internal sealed class H265SliceContext
     }
 
     /// <summary>Gets the work area that holds a copy of a plane while sample adaptive offset reads it.</summary>
-    internal ushort[] SaoSource { get; }
+    internal ushort[] SaoSource { get; private set; }
 
     /// <summary>Gets the sequence parameter set.</summary>
-    internal H265Sps Sps { get; }
+    internal H265Sps Sps { get; private set; }
 
     /// <summary>Gets the picture parameter set.</summary>
-    internal H265Pps Pps { get; }
+    internal H265Pps Pps { get; private set; }
 
     /// <summary>Gets the picture layout.</summary>
-    internal H265PictureLayout Layout { get; }
+    internal H265PictureLayout Layout { get; private set; }
 
     /// <summary>Gets the picture being decoded.</summary>
-    internal H265Picture Picture { get; }
+    internal H265Picture Picture { get; private set; }
 
     /// <summary>Gets or sets the header of the slice segment being decoded.</summary>
     internal H265SliceHeader Header { get; set; }
@@ -103,6 +98,9 @@ internal sealed class H265SliceContext
     /// <summary>Gets a work area the size of the largest transform block.</summary>
     internal int[] Scratch { get; }
 
+    /// <summary>Gets the residual samples of the transform block being reconstructed, row after row.</summary>
+    internal int[] ResidualSamples { get; } = new int[MaxBlockArea];
+
     /// <summary>Gets the state of reading a residual block.</summary>
     internal H265ResidualState Residual { get; } = new();
 
@@ -138,4 +136,33 @@ internal sealed class H265SliceContext
 
     /// <summary>Gets a value indicating whether the picture has any chroma.</summary>
     internal bool HasChroma => Sps.ChromaArrayType != ChromaSampling.Monochrome;
+
+    /// <summary>Starts the context on a new picture, clearing what the last picture left.</summary>
+    /// <param name="sps">The sequence parameter set.</param>
+    /// <param name="pps">The picture parameter set.</param>
+    /// <param name="layout">The picture layout.</param>
+    /// <param name="picture">The picture being decoded.</param>
+    /// <param name="saoSource">A work area at least as long as the luma plane, which the decoder keeps from picture to picture.</param>
+    internal void Begin(H265Sps sps, H265Pps pps, H265PictureLayout layout, H265Picture picture, ushort[] saoSource)
+    {
+        SaoSource = saoSource;
+        Sps = sps;
+        Pps = pps;
+        Layout = layout;
+        Picture = picture;
+        SliceAddrRs = 0;
+        SliceIndex = 0;
+        NoBackwardPred = false;
+        QpY = 0;
+        QpYPred = 0;
+        LastQpY = 0;
+        IsCuQpDeltaCoded = false;
+        CuQpDeltaVal = 0;
+        IsCuChromaQpOffsetCoded = false;
+        CuQpOffsetCb = 0;
+        CuQpOffsetCr = 0;
+        RefList0.Clear();
+        RefList1.Clear();
+        RefInitial.Clear();
+    }
 }

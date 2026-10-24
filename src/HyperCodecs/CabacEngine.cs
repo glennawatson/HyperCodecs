@@ -2,8 +2,10 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace HyperCodecs;
 
@@ -45,6 +47,12 @@ internal ref struct CabacEngine
 
     /// <summary>The bits read ahead into a window.</summary>
     private const int WindowBits = 24;
+
+    /// <summary>The shift that turns a bit index into a byte index.</summary>
+    private const int ByteShift = 3;
+
+    /// <summary>The bytes loaded at once when they are all in range.</summary>
+    private const int WordBytes = 4;
 
     /// <summary>The slice data.</summary>
     private readonly ReadOnlySpan<byte> _data;
@@ -171,10 +179,22 @@ internal ref struct CabacEngine
     private int ReadBits(int count)
     {
         var position = _bitPosition;
-        _bitPosition += count;
-        var index = (int)(position / ByteBits);
-        var window = (ByteAt(index) << (WindowBits - ByteBits)) | (ByteAt(index + 1) << ByteBits) | ByteAt(index + ThirdByte);
-        return (window >> (WindowBits - (int)(position % ByteBits) - count)) & ((1 << count) - 1);
+        _bitPosition = position + count;
+        var index = (int)(position >> ByteShift);
+        var bit = (int)position & (ByteBits - 1);
+        int window;
+        if (index + WordBytes <= _data.Length)
+        {
+            // Four bytes are in range: load them at once and keep the first three.
+            var word = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref MemoryMarshal.GetReference(_data), index));
+            window = (int)((BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(word) : word) >> ByteBits);
+        }
+        else
+        {
+            window = (ByteAt(index) << (WindowBits - ByteBits)) | (ByteAt(index + 1) << ByteBits) | ByteAt(index + ThirdByte);
+        }
+
+        return (window >> (WindowBits - bit - count)) & ((1 << count) - 1);
     }
 
     /// <summary>Gets a byte of the data, or zero past the end.</summary>

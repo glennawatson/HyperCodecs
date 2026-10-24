@@ -4,12 +4,26 @@
 
 namespace HyperCodecs.H265;
 
-/// <summary>The reference pictures the current picture can use, in the three groups reference lists are built from (8.3.2).</summary>
-/// <param name="StCurrBefore">The short-term pictures before the current one in output order, nearest first.</param>
-/// <param name="StCurrAfter">The short-term pictures after the current one in output order, nearest first.</param>
-/// <param name="LtCurr">The long-term pictures.</param>
-internal sealed record H265RefPicSet(H265Picture[] StCurrBefore, H265Picture[] StCurrAfter, H265Picture[] LtCurr)
+/// <summary>
+/// The reference pictures the current picture can use, in the three groups reference lists are built from (8.3.2). The decoder
+/// keeps one and fills it again for each picture, so deriving the set allocates nothing once the lists have grown.
+/// </summary>
+internal sealed class H265RefPicSet
 {
-    /// <summary>Gets the empty set.</summary>
-    internal static H265RefPicSet Empty { get; } = new([], [], []);
+    /// <summary>Gets the short-term pictures before the current one in output order, nearest first.</summary>
+    internal List<H265Picture> StCurrBefore { get; } = [];
+
+    /// <summary>Gets the short-term pictures after the current one in output order, nearest first.</summary>
+    internal List<H265Picture> StCurrAfter { get; } = [];
+
+    /// <summary>Gets the long-term pictures.</summary>
+    internal List<H265Picture> LtCurr { get; } = [];
+
+    /// <summary>Empties the three groups.</summary>
+    internal void Clear()
+    {
+        StCurrBefore.Clear();
+        StCurrAfter.Clear();
+        LtCurr.Clear();
+    }
 }

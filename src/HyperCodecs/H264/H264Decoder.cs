@@ -307,14 +307,28 @@ public sealed class H264Decoder : VideoDecoder
 
         if (type == H264Nal.Sps)
         {
-            _sets.AddSps(Unescape(nal));
+            _sets.AddSps(UnescapeIntoScratch(nal));
         }
         else if (type == H264Nal.Pps)
         {
-            _sets.AddPps(Unescape(nal));
+            _sets.AddPps(UnescapeIntoScratch(nal));
         }
 
         return null;
+    }
+
+    /// <summary>Gets the payload of a NAL unit without its header or emulation prevention bytes, in a buffer the decoder keeps.</summary>
+    /// <param name="nal">The NAL unit.</param>
+    /// <returns>The payload, which is valid until the next call.</returns>
+    private ReadOnlySpan<byte> UnescapeIntoScratch(ReadOnlySpan<byte> nal)
+    {
+        if (_rbsp.Length < nal.Length)
+        {
+            _rbsp = new byte[nal.Length];
+        }
+
+        var length = NalUnits.Unescape(nal, _rbsp, 1);
+        return _rbsp.AsSpan(0, length);
     }
 
     /// <summary>Finds a picture to decode into: one no later picture can refer to, made like new, or a new one when every kept picture is still a reference.</summary>

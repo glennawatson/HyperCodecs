@@ -70,6 +70,15 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>Works out picture order counts.</summary>
     private readonly H265PocState _poc = new();
 
+    /// <summary>The set of reference pictures of the picture being decoded.</summary>
+    private readonly H265RefPicSet _refSet = new();
+
+    /// <summary>The slice context, made once and started again for each picture.</summary>
+    private readonly H265SliceContext _contextStore;
+
+    /// <summary>Makes a stand-in for a missing reference of the picture being started; made once so deriving the reference picture set allocates no delegate.</summary>
+    private readonly Func<int, H265Picture> _makeMissing;
+
     /// <summary>The payload of the NAL unit being decoded.</summary>
     private byte[] _rbsp = new byte[1_024];
 
@@ -79,8 +88,11 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>The copy of a plane that sample adaptive offset reads, kept from picture to picture.</summary>
     private ushort[] _saoSource = [];
 
-    /// <summary>The set of reference pictures of the picture being decoded.</summary>
-    private H265RefPicSet _refSet = H265RefPicSet.Empty;
+    /// <summary>The sequence parameter set of the picture being started, for <see cref="_makeMissing"/>.</summary>
+    private H265Sps? _startSps;
+
+    /// <summary>The picture parameter set of the picture being started, for <see cref="_makeMissing"/>.</summary>
+    private H265Pps? _startPps;
 
     /// <summary>The header of the last independent slice segment, which dependent segments continue.</summary>
     private H265SliceHeader? _lastIndependent;
@@ -113,6 +125,8 @@ public sealed class H265Decoder : VideoDecoder
     {
         _lengthSize = lengthSize;
         _hardware = hardware;
+        _contextStore = new(_prediction);
+        _makeMissing = MakeMissingForStart;
     }
 
     /// <summary>Makes a decoder for an H.265 track.</summary>
@@ -320,15 +334,23 @@ public sealed class H265Decoder : VideoDecoder
             return;
         }
 
+        // Streams repeat their parameter sets before every key picture; a set that is already stored is not read again,
+        // so the picture layout built from it is kept too.
+        if (sets.IsStored(type == H265Nal.Sps, nal))
+        {
+            return;
+        }
+
+        var raw = nal.ToArray();
         var buffer = new byte[nal.Length];
         var length = NalUnits.Unescape(nal, buffer, H265Nal.HeaderBytes);
         if (type == H265Nal.Sps)
         {
-            sets.Add(H265SpsReader.Read(buffer.AsSpan(0, length)));
+            sets.Add(H265SpsReader.Read(buffer.AsSpan(0, length)), raw);
         }
         else
         {
-            sets.Add(H265PpsReader.Read(buffer.AsSpan(0, length)));
+            sets.Add(H265PpsReader.Read(buffer.AsSpan(0, length)), raw);
         }
     }
 
@@ -395,7 +417,7 @@ public sealed class H265Decoder : VideoDecoder
 
         _context.Header = header;
         H265RefListBuilder.Build(_context, _refSet);
-        _context.SliceIndex = _context.Picture.SliceRefs.Count - 1;
+        _context.SliceIndex = _context.Picture.SliceRefCount - 1;
         if (_hardware is null)
         {
             H265SliceDecoder.Decode(rbsp, _context);
@@ -480,7 +502,9 @@ public sealed class H265Decoder : VideoDecoder
             ReleasePrior(header, output);
         }
 
-        _refSet = H265RpsDerivation.Derive(_dpb, sps, header, poc, H265Nal.IsIdr(type), missing => MakeMissing(sps, pps, missing));
+        _startSps = sps;
+        _startPps = pps;
+        H265RpsDerivation.Derive(_refSet, _dpb, sps, header, poc, H265Nal.IsIdr(type), _makeMissing);
         _dpb.RemoveUnused();
         MakeRoom(sps, output);
         BeginPicture(header, new(sps, pps), poc);
@@ -516,7 +540,8 @@ public sealed class H265Decoder : VideoDecoder
             _saoSource = new ushort[picture.Luma.Length];
         }
 
-        return new(sps, pps, layout, picture, _prediction, _saoSource);
+        _contextStore.Begin(sps, pps, layout, picture, _saoSource);
+        return _contextStore;
     }
 
     /// <summary>Finds a picture to decode into: one the buffer no longer holds, made like new, or a new one when every kept picture is still in the buffer.</summary>
@@ -677,6 +702,12 @@ public sealed class H265Decoder : VideoDecoder
 
         return _layout;
     }
+
+    /// <summary>Makes a stand-in for a reference picture of the picture being started that the stream did not provide.</summary>
+    /// <param name="poc">The picture order count of the missing picture.</param>
+    /// <returns>The picture.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private H265Picture MakeMissingForStart(int poc) => MakeMissing(_startSps!, _startPps!, poc);
 
     /// <summary>Makes a mid-grey stand-in for a reference picture the stream did not provide.</summary>
     /// <param name="sps">The sequence parameter set.</param>

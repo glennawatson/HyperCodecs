@@ -3,12 +3,16 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
 
 namespace HyperCodecs.H264;
 
 /// <summary>Predicts the samples of an inter block from a reference frame (clause 8.4.2.2 of ITU-T H.264).</summary>
 internal static class H264MotionCompensation
 {
+    /// <summary>The number of 32 bit values in a 128 bit vector.</summary>
+    private const int Lanes = 4;
+
     /// <summary>The largest block, in samples along a side.</summary>
     private const int MaxBlock = 16;
 
@@ -143,13 +147,10 @@ internal static class H264MotionCompensation
             FillMiddle(window, windowStride, block, middle);
         }
 
+        var shape = new WindowShape(windowStride, block.Width);
         for (var row = 0; row < block.Height; row++)
         {
-            var offset = ((target.Y + row) * target.Stride) + target.X;
-            for (var column = 0; column < block.Width; column++)
-            {
-                target.Plane[offset + column] = (byte)Sample(window, middle, new(windowStride, block.Width), new(column, row), fraction);
-            }
+            PredictRow(window, middle, shape, row, fraction, target.Plane, ((target.Y + row) * target.Stride) + target.X);
         }
     }
 
@@ -189,6 +190,31 @@ internal static class H264MotionCompensation
                     + (fractionX * fractionY * reference[lower + right]);
                 target.Plane[offset + column] = (byte)((sum + ChromaRound) >> ChromaShift);
             }
+        }
+    }
+
+    /// <summary>Predicts one row of a luma block, four samples at a time where vectors are available.</summary>
+    /// <param name="window">The reference samples around the block.</param>
+    /// <param name="middle">The rows of the window filtered horizontally, when the position needs them.</param>
+    /// <param name="shape">The window's width and the block's width.</param>
+    /// <param name="row">The row in the block.</param>
+    /// <param name="fraction">The quarter-sample position.</param>
+    /// <param name="plane">Receives the samples.</param>
+    /// <param name="offset">The index in the plane of the row's first sample.</param>
+    private static void PredictRow(ReadOnlySpan<int> window, ReadOnlySpan<int> middle, WindowShape shape, int row, int fraction, byte[] plane, int offset)
+    {
+        var column = 0;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            for (; column + Lanes <= shape.BlockWidth; column += Lanes)
+            {
+                StoreSamples(SampleVector(window, middle, shape, new(column, row), fraction), plane, offset + column);
+            }
+        }
+
+        for (; column < shape.BlockWidth; column++)
+        {
+            plane[offset + column] = (byte)Sample(window, middle, shape, new(column, row), fraction);
         }
     }
 
@@ -308,11 +334,157 @@ internal static class H264MotionCompensation
     {
         for (var windowRow = 0; windowRow < block.Height + TapSpan; windowRow++)
         {
-            for (var column = 0; column < block.Width; column++)
+            var column = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                for (; column + Lanes <= block.Width; column += Lanes)
+                {
+                    RowTapsVector(window, stride, column, windowRow).CopyTo(middle.Slice((windowRow * block.Width) + column, Lanes));
+                }
+            }
+
+            for (; column < block.Width; column++)
             {
                 middle[(windowRow * block.Width) + column] = RowTaps(window, stride, column, windowRow);
             }
         }
+    }
+
+    /// <summary>Works out four predicted luma samples side by side from the window (Table 8-12).</summary>
+    /// <param name="window">The reference samples around the block.</param>
+    /// <param name="middle">The rows of the window filtered horizontally, when the position needs them.</param>
+    /// <param name="shape">The window's width and the block's width.</param>
+    /// <param name="at">The first sample's column and row in the block.</param>
+    /// <param name="fraction">The quarter-sample position.</param>
+    /// <returns>The four samples.</returns>
+    private static Vector128<int> SampleVector(ReadOnlySpan<int> window, ReadOnlySpan<int> middle, WindowShape shape, SamplePlace at, int fraction)
+    {
+        var first = Mix[fraction * PairSize];
+        var second = Mix[(fraction * PairSize) + 1];
+        var value = KindVector(window, middle, shape, at, first);
+        return first == second ? value : Vector128.ShiftRightArithmetic(value + KindVector(window, middle, shape, at, second) + Vector128<int>.One, 1);
+    }
+
+    /// <summary>Gets four side by side samples of one of the kinds the quarter-sample positions are made of.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="middle">The rows of the window filtered horizontally.</param>
+    /// <param name="shape">The window's width and the block's width.</param>
+    /// <param name="at">The first sample's column and row in the block.</param>
+    /// <param name="kind">Which sample.</param>
+    /// <returns>The four sample values.</returns>
+    private static Vector128<int> KindVector(ReadOnlySpan<int> window, ReadOnlySpan<int> middle, WindowShape shape, SamplePlace at, int kind)
+    {
+        var stride = shape.Stride;
+        var (column, row) = at;
+        var here = ((row + TapBefore) * stride) + column + TapBefore;
+        return kind switch
+        {
+            WholeRight => LoadSamples(window, here + 1),
+            WholeBelow => LoadSamples(window, here + stride),
+            HalfRight => HalfXVector(window, stride, column, row),
+            HalfBelow => HalfYVector(window, stride, column, row),
+            HalfCentre => CentreVector(middle, shape.BlockWidth, column, row),
+            HalfBelowRight => HalfYVector(window, stride, column + 1, row),
+            HalfRightBelow => HalfXVector(window, stride, column, row + 1),
+            _ => LoadSamples(window, here),
+        };
+    }
+
+    /// <summary>Loads four consecutive window samples.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="index">The index of the first.</param>
+    /// <returns>The samples.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> LoadSamples(ReadOnlySpan<int> window, int index) => Vector128.Create(window.Slice(index, Lanes));
+
+    /// <summary>Limits four values to the range of a sample.</summary>
+    /// <param name="values">The values.</param>
+    /// <returns>The values clamped to 0 to 255.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> ClipVector(Vector128<int> values) => Vector128.Clamp(values, Vector128<int>.Zero, Vector128.Create(MaxSample));
+
+    /// <summary>Filters six samples along a row for four side by side columns, without rounding.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="stride">The window's width.</param>
+    /// <param name="column">The block column of the first of the six taps for the first column.</param>
+    /// <param name="windowRow">The window row.</param>
+    /// <returns>The filtered values, scaled by 32.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> RowTapsVector(ReadOnlySpan<int> window, int stride, int column, int windowRow)
+    {
+        var start = (windowRow * stride) + column;
+        var side = Vector128.Create(WeightSide);
+        var centre = Vector128.Create(WeightCentre);
+        return LoadSamples(window, start) - (side * LoadSamples(window, start + Tap1)) + (centre * LoadSamples(window, start + Tap2))
+            + (centre * LoadSamples(window, start + Tap3)) - (side * LoadSamples(window, start + Tap4)) + LoadSamples(window, start + Tap5);
+    }
+
+    /// <summary>Filters six samples down a column for four side by side columns, without rounding.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="stride">The window's width.</param>
+    /// <param name="windowColumn">The window column of the first column.</param>
+    /// <param name="row">The window row of the first of the six taps.</param>
+    /// <returns>The filtered values, scaled by 32.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> ColumnTapsVector(ReadOnlySpan<int> window, int stride, int windowColumn, int row)
+    {
+        var start = (row * stride) + windowColumn;
+        var side = Vector128.Create(WeightSide);
+        var centre = Vector128.Create(WeightCentre);
+        return LoadSamples(window, start) - (side * LoadSamples(window, start + (Tap1 * stride))) + (centre * LoadSamples(window, start + (Tap2 * stride)))
+            + (centre * LoadSamples(window, start + (Tap3 * stride))) - (side * LoadSamples(window, start + (Tap4 * stride))) + LoadSamples(window, start + (Tap5 * stride));
+    }
+
+    /// <summary>Gets the half-sample positions to the right of four side by side samples.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="stride">The window's width.</param>
+    /// <param name="column">The block column of the first.</param>
+    /// <param name="row">The block row.</param>
+    /// <returns>The sample values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> HalfXVector(ReadOnlySpan<int> window, int stride, int column, int row) =>
+        ClipVector(Vector128.ShiftRightArithmetic(RowTapsVector(window, stride, column, row + TapBefore) + Vector128.Create(HalfRound), HalfShift));
+
+    /// <summary>Gets the half-sample positions below four side by side samples.</summary>
+    /// <param name="window">The window.</param>
+    /// <param name="stride">The window's width.</param>
+    /// <param name="column">The block column of the first.</param>
+    /// <param name="row">The block row.</param>
+    /// <returns>The sample values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> HalfYVector(ReadOnlySpan<int> window, int stride, int column, int row) =>
+        ClipVector(Vector128.ShiftRightArithmetic(ColumnTapsVector(window, stride, column + TapBefore, row) + Vector128.Create(HalfRound), HalfShift));
+
+    /// <summary>Gets the half-sample positions at the centre of four samples, for four side by side columns.</summary>
+    /// <param name="middle">The window rows filtered horizontally, each as wide as the block.</param>
+    /// <param name="width">The block's width.</param>
+    /// <param name="column">The block column of the first.</param>
+    /// <param name="row">The block row.</param>
+    /// <returns>The sample values.</returns>
+    private static Vector128<int> CentreVector(ReadOnlySpan<int> middle, int width, int column, int row)
+    {
+        var start = (row * width) + column;
+        var side = Vector128.Create(WeightSide);
+        var centre = Vector128.Create(WeightCentre);
+        var total = LoadSamples(middle, start)
+            - (side * LoadSamples(middle, start + (Tap1 * width)))
+            + (centre * LoadSamples(middle, start + (Tap2 * width)))
+            + (centre * LoadSamples(middle, start + (Tap3 * width)))
+            - (side * LoadSamples(middle, start + (Tap4 * width)))
+            + LoadSamples(middle, start + (Tap5 * width));
+        return ClipVector(Vector128.ShiftRightArithmetic(total + Vector128.Create(CentreRound), CentreShift));
+    }
+
+    /// <summary>Stores four samples, each between 0 and 255, as bytes.</summary>
+    /// <param name="values">The samples.</param>
+    /// <param name="plane">Receives the bytes.</param>
+    /// <param name="index">The index of the first byte.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void StoreSamples(Vector128<int> values, byte[] plane, int index)
+    {
+        var shorts = Vector128.Narrow(values, values).AsUInt16();
+        var bytes = Vector128.Narrow(shorts, shorts);
+        Unsafe.WriteUnaligned(ref plane[index], bytes.AsUInt32().ToScalar());
     }
 
     /// <summary>Copies a block of whole samples that lies inside the reference plane.</summary>

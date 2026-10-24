@@ -31,6 +31,8 @@ internal static class H265Reconstruction
         var levels = context.Coefficients.AsSpan(0, side * side);
         var bitDepth = block.CIdx == 0 ? context.Sps.BitDepthLuma : context.Sps.BitDepthChroma;
         var rotate = context.Sps.Range.TransformSkipRotation && side == RotatedSide && block.Intra;
+        var residual = levels;
+        var transformed = false;
         if (block.Bypass)
         {
             if (rotate)
@@ -41,30 +43,51 @@ internal static class H265Reconstruction
         else
         {
             H265Dequantizer.Scale(context, levels, block, result.TransformSkip, result.Extent);
-            Transform(context, levels, block, result, rotate, bitDepth);
+            if (result.TransformSkip)
+            {
+                SkipTransform(levels, block, rotate, bitDepth);
+            }
+            else
+            {
+                // The inverse transform writes the residual to its own buffer, so only the part of the coefficient array that held coefficients needs clearing.
+                residual = context.ResidualSamples.AsSpan(0, levels.Length);
+                var dst = block.Intra && block.Log2Size == DstLog2 && block.CIdx == 0;
+                H265Transform.Inverse(levels, residual, block.Log2Size, dst, bitDepth, result.Extent, context.Scratch);
+                transformed = true;
+            }
         }
 
-        Accumulate(levels, side, result.Rdpcm);
-        AddToPicture(context, levels, block.CIdx, new(x, y, side, side), bitDepth);
-        levels.Clear();
+        Accumulate(residual, side, result.Rdpcm);
+        AddToPicture(context, residual, block.CIdx, new(x, y, side, side), bitDepth);
+        if (transformed)
+        {
+            ClearExtent(levels, side, result.Extent);
+        }
+        else
+        {
+            levels.Clear();
+        }
     }
 
-    /// <summary>Applies the inverse transform, or the shift that replaces it for a block that skips the transform.</summary>
-    /// <param name="context">The slice context.</param>
+    /// <summary>Clears the part of a coefficient array that can hold coefficients.</summary>
+    /// <param name="levels">The coefficients, row after row.</param>
+    /// <param name="side">The block side.</param>
+    /// <param name="extent">The columns and rows that can hold coefficients.</param>
+    private static void ClearExtent(Span<int> levels, int side, H265BlockExtent extent)
+    {
+        for (var row = 0; row <= extent.LastRow; row++)
+        {
+            levels.Slice(row * side, extent.LastColumn + 1).Clear();
+        }
+    }
+
+    /// <summary>Applies the shift that replaces the transform for a block that skips it.</summary>
     /// <param name="levels">The scaled coefficients, replaced by residual samples.</param>
     /// <param name="block">Describes the block.</param>
-    /// <param name="result">What reading the residual found.</param>
-    /// <param name="rotate">Whether a skipped block is rotated by half a turn.</param>
+    /// <param name="rotate">Whether the block is rotated by half a turn.</param>
     /// <param name="bitDepth">The bit depth of the colour component.</param>
-    private static void Transform(H265SliceContext context, Span<int> levels, in H265ResidualBlock block, H265ResidualResult result, bool rotate, int bitDepth)
+    private static void SkipTransform(Span<int> levels, in H265ResidualBlock block, bool rotate, int bitDepth)
     {
-        if (!result.TransformSkip)
-        {
-            var dst = block.Intra && block.Log2Size == DstLog2 && block.CIdx == 0;
-            H265Transform.Inverse(levels, block.Log2Size, dst, bitDepth, result.Extent, context.Scratch);
-            return;
-        }
-
         if (rotate)
         {
             levels.Reverse();

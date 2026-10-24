@@ -2,6 +2,9 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+
 namespace HyperCodecs.H265;
 
 /// <summary>Turns a decoded picture into the 8 bit 4:2:0 frame the video player shows: cropped, reduced to 8 bits and, for other chroma formats, resampled.</summary>
@@ -62,11 +65,43 @@ internal static class H265FrameConverter
         {
             var source = ((area.Y + (row * stepY)) * stride) + area.X;
             var destination = row * area.Width;
+            if (shift == 0 && stepX == 1)
+            {
+                NarrowRow(plane.AsSpan(source, area.Width), target.AsSpan(destination, area.Width));
+                continue;
+            }
+
             for (var column = 0; column < area.Width; column++)
             {
                 var value = (plane[source + (column * stepX)] + round) >> shift;
                 target[destination + column] = (byte)Math.Min(value, byte.MaxValue);
             }
+        }
+    }
+
+    /// <summary>Narrows a row of samples that already fit in 8 bits.</summary>
+    /// <param name="source">The samples, none above 255.</param>
+    /// <param name="target">Receives the bytes; the same length.</param>
+    private static void NarrowRow(ReadOnlySpan<ushort> source, Span<byte> target)
+    {
+        var index = 0;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            var step = Vector128<ushort>.Count;
+            var both = step + step;
+            ref var from = ref MemoryMarshal.GetReference(source);
+            ref var to = ref MemoryMarshal.GetReference(target);
+            for (; index <= source.Length - both; index += both)
+            {
+                var low = Vector128.LoadUnsafe(ref from, (nuint)index);
+                var high = Vector128.LoadUnsafe(ref from, (nuint)(index + step));
+                Vector128.Narrow(low, high).StoreUnsafe(ref to, (nuint)index);
+            }
+        }
+
+        for (; index < source.Length; index++)
+        {
+            target[index] = (byte)source[index];
         }
     }
 }

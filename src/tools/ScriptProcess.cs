@@ -19,7 +19,7 @@ internal static class ScriptProcess
     /// <exception cref="DirectoryNotFoundException">The checkout cannot be located.</exception>
     internal static string Root([CallerFilePath] string source = "")
     {
-        var sourceRoot = Path.GetDirectoryName(Path.GetDirectoryName(source));
+        var sourceRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(source)));
         if (sourceRoot is not null && IsCheckout(sourceRoot))
         {
             return sourceRoot;

@@ -20,6 +20,9 @@ internal sealed class H264ParameterSets
     /// <summary>The sequence parameter sets, by number.</summary>
     private readonly H264Sps?[] _sps = new H264Sps?[SpsCount];
 
+    /// <summary>The payloads of the sequence parameter sets, by number, as they were sent.</summary>
+    private readonly byte[]?[] _spsRaw = new byte[]?[SpsCount];
+
     /// <summary>The payloads of the picture parameter sets, by number, as they were sent.</summary>
     private readonly byte[]?[] _ppsRaw = new byte[]?[PpsCount];
 
@@ -32,6 +35,15 @@ internal sealed class H264ParameterSets
     /// <exception cref="NotSupportedException">The set uses a feature this decoder does not read.</exception>
     internal void AddSps(ReadOnlySpan<byte> rbsp)
     {
+        // Streams repeat their sets before every key picture; a payload already stored is not read again.
+        for (var id = 0; id < SpsCount; id++)
+        {
+            if (_spsRaw[id] is { } stored && rbsp.SequenceEqual(stored))
+            {
+                return;
+            }
+        }
+
         var sps = H264SpsReader.Read(rbsp);
         if (!sps.Equals(_sps[sps.Id]))
         {
@@ -40,6 +52,7 @@ internal sealed class H264ParameterSets
         }
 
         _sps[sps.Id] = sps;
+        _spsRaw[sps.Id] = rbsp.ToArray();
     }
 
     /// <summary>Takes in a picture parameter set.</summary>
@@ -52,6 +65,11 @@ internal sealed class H264ParameterSets
         if (id >= PpsCount || reader.IsOverrun)
         {
             throw new InvalidDataException("An H.264 picture parameter set is damaged.");
+        }
+
+        if (_ppsRaw[id] is { } stored && rbsp.SequenceEqual(stored))
+        {
+            return;
         }
 
         _ppsRaw[id] = rbsp.ToArray();

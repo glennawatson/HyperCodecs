@@ -79,7 +79,7 @@ if (added != 0)
 
 try
 {
-    var relative = Path.Combine("benchmarks", "HyperCodecs.Benchmarks");
+    var relative = Path.Combine("src", "benchmarks", "HyperCodecs.Benchmarks");
     CopyBenchmarks(Path.Combine(root, relative), Path.Combine(baseline, relative));
     string[] allocation = [
         "--launchCount",

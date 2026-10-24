@@ -172,9 +172,14 @@ internal sealed class H264Picture
     /// <summary>Returns the picture to the state a new one has, so a picture nothing refers to any more can be decoded into again.</summary>
     internal void Recycle()
     {
-        Array.Clear(Luma);
-        Array.Clear(Cb);
-        Array.Clear(Cr);
+        // Decoding writes every sample of a macroblock, so the planes of a picture whose macroblocks were all decoded hold nothing that needs clearing.
+        if (Array.IndexOf(SliceOfMb, -1) >= 0)
+        {
+            Array.Clear(Luma);
+            Array.Clear(Cb);
+            Array.Clear(Cr);
+        }
+
         Array.Clear(IntraModes);
         Array.Clear(Counts);
         Array.Clear(Qp);

@@ -3,82 +3,46 @@
 // See the LICENSE file in the project root for full license information.
 
 using BenchmarkDotNet.Attributes;
-using HyperCodecs;
 
 namespace HyperCodecs.Benchmarks;
 
-/// <summary>Decodes predicted and bi-predicted H.264 and H.265 files, which exercise motion compensation and the loop filters.</summary>
+/// <summary>
+/// Decodes H.264 and H.265 files that exercise each coding tool: intra, predicted and bi-predicted pictures, CAVLC and CABAC,
+/// weighted prediction and the loop filters. The decoder is made once and reused.
+/// </summary>
 public class HyperCodecsVideoDecodeBenchmarks
 {
-    /// <summary>The track description of the picture track.</summary>
-    private MediaTrack? _track;
-
-    /// <summary>The coded pictures, read once.</summary>
-    private List<MediaPacket>? _packets;
-
-    /// <summary>The decoded pictures, cleared before each run.</summary>
-    private List<VideoFrame>? _frames;
+    /// <summary>The packets of the file.</summary>
+    private VideoClip? _clip;
 
     /// <summary>Gets or sets the file under test.</summary>
-    [Params("h264-p-cabac.mp4", "h264-b-cabac-deblock.mp4", "h265-intra.mp4", "h265-p.mp4", "h265-b.mp4", "h265-loop-filters-ctu32.mp4")]
+    [Params(
+        "h264-intra-baseline.mp4",
+        "h264-intra-cabac.mp4",
+        "h264-p-cavlc-partitions.mp4",
+        "h264-p-cabac.mp4",
+        "h264-p-cabac-weighted.mp4",
+        "h264-high-p-cabac.mp4",
+        "h264-b-cavlc-temporal.mp4",
+        "h264-b-cabac-deblock.mp4",
+        "h265-intra.mp4",
+        "h265-p.mp4",
+        "h265-b.mp4",
+        "h265-b-weighted.mp4",
+        "h265-loop-filters-ctu32.mp4",
+        "h265-intra-wavefront.mp4")]
     public string Source { get; set; } = "h264-p-cabac.mp4";
 
     /// <summary>Reads the coded pictures of the file.</summary>
-    /// <exception cref="InvalidDataException">The file did not open.</exception>
     [GlobalSetup]
-    public void Setup()
-    {
-        using var container = MediaContainers.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", Source))
-            ?? throw new InvalidDataException($"{Source} did not open.");
-        var index = container.FindTrack(MediaTrackKind.Video);
-        _track = container.Tracks[index];
-        _packets = [];
-        var packet = new MediaPacket();
-        while (container.ReadPacket(packet))
-        {
-            if (packet.Track != index)
-            {
-                continue;
-            }
+    public void Setup() => _clip = VideoClip.Load(Source);
 
-            var copy = new MediaPacket();
-            packet.Data.CopyTo(copy.Begin(packet.Track, packet.Length, packet.Time, packet.Duration, packet.IsKey));
-            _packets.Add(copy);
-        }
-
-        _frames = [];
-    }
+    /// <summary>Lets go of the decoder.</summary>
+    [GlobalCleanup]
+    public void Cleanup() => _clip?.Dispose();
 
     /// <summary>Decodes every picture.</summary>
     /// <returns>The number of pictures.</returns>
-    /// <exception cref="NotSupportedException">No decoder handles the track.</exception>
     [Benchmark]
-    public int DecodeAll()
-    {
-        using var decoder = VideoDecoders.Create(_track!) ?? throw new NotSupportedException("No decoder for the track.");
-        var count = 0;
-        foreach (var packet in _packets!)
-        {
-            decoder.Decode(packet, _frames!);
-            count += Recycle(decoder);
-        }
-
-        decoder.Flush(_frames!);
-        return count + Recycle(decoder);
-    }
-
-    /// <summary>Hands the pictures back to the decoder, as the player does once it has shown them.</summary>
-    /// <param name="decoder">The decoder.</param>
-    /// <returns>The number of pictures.</returns>
-    private int Recycle(VideoDecoder decoder)
-    {
-        var count = _frames!.Count;
-        foreach (var frame in _frames)
-        {
-            decoder.Recycle(frame);
-        }
-
-        _frames.Clear();
-        return count;
-    }
+    public int DecodeAll() => _clip!.Decode();
 }

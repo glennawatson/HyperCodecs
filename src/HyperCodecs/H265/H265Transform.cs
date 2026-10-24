@@ -19,6 +19,9 @@ internal static class H265Transform
     /// <summary>The bits that bit depth and the second shift add up to.</summary>
     private const int ShiftTotal = 20;
 
+    /// <summary>The value of every entry of the first row of the DCT matrix.</summary>
+    private const int DcWeight = 64;
+
     /// <summary>The side of the DST block.</summary>
     private const int DstSide = 4;
 
@@ -28,21 +31,31 @@ internal static class H265Transform
     /// <summary>The shift that turns a column index into the index of its group of lanes.</summary>
     private const int LaneShift = 2;
 
-    /// <summary>Transforms a block of scaled coefficients to residual samples, in place.</summary>
-    /// <param name="block">The coefficients, row after row; they are replaced by the residual.</param>
+    /// <summary>Transforms a block of scaled coefficients to residual samples.</summary>
+    /// <param name="block">The coefficients, row after row; they are left as they were.</param>
+    /// <param name="residual">Receives the residual samples, row after row; every sample of the block is written.</param>
     /// <param name="log2Size">The base 2 logarithm of the block side, from 2 to 5.</param>
     /// <param name="dst">Whether to use the DST of 4x4 intra luma blocks.</param>
     /// <param name="bitDepth">The bit depth of the component.</param>
     /// <param name="extent">The columns and rows that can hold non-zero coefficients, the last index of each.</param>
     /// <param name="scratch">A work area of at least the block's size.</param>
-    internal static void Inverse(Span<int> block, int log2Size, bool dst, int bitDepth, H265BlockExtent extent, Span<int> scratch)
+    internal static void Inverse(ReadOnlySpan<int> block, Span<int> residual, int log2Size, bool dst, int bitDepth, H265BlockExtent extent, Span<int> scratch)
     {
         var side = 1 << log2Size;
+        if (!dst && extent.LastColumn == 0 && extent.LastRow == 0)
+        {
+            // Only the DC coefficient is set and every entry of the DCT's first basis function is the same, so each stage gives one value for the whole block.
+            var shift = ShiftTotal - bitDepth;
+            var first = Math.Clamp(((block[0] * DcWeight) + (1 << (FirstShift - 1))) >> FirstShift, short.MinValue, short.MaxValue);
+            residual[..(side * side)].Fill(((first * DcWeight) + (1 << (shift - 1))) >> shift);
+            return;
+        }
+
         var table = dst
             ? new H265TransformTable(H265TransformMatrix.DstWide(), DstSide, 1)
             : new H265TransformTable(H265TransformMatrix.DctWide(), H265TransformMatrix.Side, H265TransformMatrix.Side >> log2Size);
         Columns(block, scratch, side, table, extent);
-        Rows(block, scratch, side, table, extent.LastColumn, ShiftTotal - bitDepth);
+        Rows(residual, scratch, side, table, extent.LastColumn, ShiftTotal - bitDepth);
     }
 
     /// <summary>Transforms every column that may hold coefficients, writing the clipped result to the work area.</summary>

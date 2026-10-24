@@ -164,8 +164,14 @@ internal sealed class H265Picture
     /// <summary>Gets the sample adaptive offset parameters of each coding tree block, in the layout of <see cref="H265SaoParams"/>.</summary>
     internal int[] Sao { get; }
 
-    /// <summary>Gets the reference picture lists of each slice of the picture, which a later picture needs to follow the motion.</summary>
+    /// <summary>Gets the reference picture lists of each slice of the picture, which a later picture needs to follow the motion. The first <see cref="SliceRefCount"/> are in use.</summary>
     internal List<H265SliceRefs> SliceRefs { get; }
+
+    /// <summary>Gets the number of entries of <see cref="SliceRefs"/> in use.</summary>
+    internal int SliceRefCount { get; private set; }
+
+    /// <summary>Gets or sets a value indicating whether the reference picture set being derived keeps the picture.</summary>
+    internal bool IsKept { get; set; }
 
     /// <summary>Gets or sets when the picture is shown, in seconds.</summary>
     internal double Time { get; set; }
@@ -211,9 +217,14 @@ internal sealed class H265Picture
     /// <summary>Returns the picture to the state a new one has, so a picture nothing refers to any more can be decoded into again.</summary>
     internal void Recycle()
     {
-        Array.Clear(Luma);
-        Array.Clear(Cb);
-        Array.Clear(Cr);
+        // Decoding writes every sample of a coding tree block, so the planes of a picture whose blocks were all decoded hold nothing that needs clearing.
+        if (Array.IndexOf(SliceOfCtb, -1) >= 0)
+        {
+            Array.Clear(Luma);
+            Array.Clear(Cb);
+            Array.Clear(Cr);
+        }
+
         Array.Clear(Kind);
         Array.Clear(Flags);
         Array.Clear(IntraMode);
@@ -224,7 +235,7 @@ internal sealed class H265Picture
         Array.Clear(RefsIndexOfCtb);
         Array.Fill(SliceOfCtb, -1);
         Array.Fill(Motion, H265PuMotion.None);
-        SliceRefs.Clear();
+        SliceRefCount = 0;
         Time = 0;
         Poc = 0;
         ReferenceState = 0;
@@ -232,6 +243,20 @@ internal sealed class H265Picture
         LatencyCount = 0;
         IsGenerated = false;
         Sps = null;
+    }
+
+    /// <summary>Takes the next entry of <see cref="SliceRefs"/> for a new slice, adding one only when the picture has not held this many slices before.</summary>
+    /// <returns>The entry, which still holds the lists of an earlier use.</returns>
+    internal H265SliceRefs NextSliceRefs()
+    {
+        if (SliceRefCount == SliceRefs.Count)
+        {
+            SliceRefs.Add(new());
+        }
+
+        var refs = SliceRefs[SliceRefCount];
+        SliceRefCount++;
+        return refs;
     }
 
     /// <summary>Gets the offset in the 4x4 grid of a luma position.</summary>

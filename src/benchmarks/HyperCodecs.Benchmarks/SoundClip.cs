@@ -6,26 +6,32 @@ using HyperCodecs;
 
 namespace HyperCodecs.Benchmarks;
 
-/// <summary>The packets of the first sound track of a file, read once, and the buffer that decoding them fills again each time.</summary>
-internal sealed class SoundClip
+/// <summary>
+/// The packets of the first sound track of a file, read once, with the decoder that decodes them and the buffer it fills. The
+/// decoder is made once and reset for each run, so a run measures decoding a packet and not building a decoder.
+/// </summary>
+internal sealed class SoundClip : IDisposable
 {
-    /// <summary>The track.</summary>
-    private readonly MediaTrack _track;
-
     /// <summary>The packets.</summary>
     private readonly List<MediaPacket> _packets;
+
+    /// <summary>The decoder, made once.</summary>
+    private readonly AudioDecoder _decoder;
 
     /// <summary>The decoded sound, which is cleared and filled again each time.</summary>
     private readonly PcmBuffer _pcm = new();
 
     /// <summary>Initializes a new instance of the <see cref="SoundClip"/> class.</summary>
-    /// <param name="track">The track.</param>
+    /// <param name="decoder">The decoder.</param>
     /// <param name="packets">The packets.</param>
-    private SoundClip(MediaTrack track, List<MediaPacket> packets)
+    private SoundClip(AudioDecoder decoder, List<MediaPacket> packets)
     {
-        _track = track;
+        _decoder = decoder;
         _packets = packets;
     }
+
+    /// <inheritdoc/>
+    public void Dispose() => _decoder.Dispose();
 
     /// <summary>Reads every packet of the first sound track of a file.</summary>
     /// <param name="name">The file name in the fixtures folder next to the benchmarks.</param>
@@ -35,6 +41,15 @@ internal sealed class SoundClip
     {
         using var container = MediaContainers.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", name))
             ?? throw new InvalidDataException($"{name} did not open.");
+        return Load(container);
+    }
+
+    /// <summary>Reads every packet of the first sound track of a container.</summary>
+    /// <param name="container">The open container.</param>
+    /// <returns>The clip.</returns>
+    /// <exception cref="InvalidDataException">No decoder reads the track.</exception>
+    internal static SoundClip Load(MediaContainer container)
+    {
         var index = container.FindTrack(MediaTrackKind.Audio);
         var packets = new List<MediaPacket>();
         while (true)
@@ -51,18 +66,19 @@ internal sealed class SoundClip
             }
         }
 
-        return new(container.Tracks[index], packets);
+        var decoder = AudioDecoders.Create(container.Tracks[index]) ?? throw new InvalidDataException("No decoder reads the track.");
+        return new(decoder, packets);
     }
 
-    /// <summary>Decodes every packet with a new decoder.</summary>
+    /// <summary>Decodes every packet from the start.</summary>
     /// <returns>The samples decoded.</returns>
     internal int Decode()
     {
-        using var decoder = AudioDecoders.Create(_track)!;
+        _decoder.Reset();
         _pcm.Clear();
         foreach (var packet in _packets)
         {
-            decoder.Decode(packet, _pcm);
+            _decoder.Decode(packet, _pcm);
         }
 
         return _pcm.Count;

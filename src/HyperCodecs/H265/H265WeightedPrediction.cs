@@ -2,11 +2,17 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+
 namespace HyperCodecs.H265;
 
 /// <summary>Combines the intermediate predictions of one or two reference lists into picture samples, with the default or the explicit weighting (8.5.3.3.4).</summary>
 internal static class H265WeightedPrediction
 {
+    /// <summary>The number of 32 bit values in a 128 bit vector.</summary>
+    private const int Lanes = 4;
+
     /// <summary>The intermediate bit depth.</summary>
     private const int IntermediateBits = 14;
 
@@ -75,7 +81,18 @@ internal static class H265WeightedPrediction
         for (var y = 0; y < area.Height; y++)
         {
             var row = target.Offset + (y * target.Stride);
-            for (var x = 0; x < area.Width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var add = Vector128.Create(offset);
+                var limit = Vector128.Create(maximum);
+                for (; x + Lanes <= area.Width; x += Lanes)
+                {
+                    StoreClamped(Vector128.ShiftRightArithmetic(Widen(source, (y * area.Width) + x) + add, shift), limit, target.Plane, row + x);
+                }
+            }
+
+            for (; x < area.Width; x++)
             {
                 target.Plane[row + x] = (ushort)Math.Clamp((source[(y * area.Width) + x] + offset) >> shift, 0, maximum);
             }
@@ -96,12 +113,44 @@ internal static class H265WeightedPrediction
         for (var y = 0; y < area.Height; y++)
         {
             var row = target.Offset + (y * target.Stride);
-            for (var x = 0; x < area.Width; x++)
+            var x = 0;
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var add = Vector128.Create(offset);
+                var limit = Vector128.Create(maximum);
+                for (; x + Lanes <= area.Width; x += Lanes)
+                {
+                    var index = (y * area.Width) + x;
+                    StoreClamped(Vector128.ShiftRightArithmetic(Widen(first, index) + Widen(second, index) + add, shift), limit, target.Plane, row + x);
+                }
+            }
+
+            for (; x < area.Width; x++)
             {
                 var index = (y * area.Width) + x;
                 target.Plane[row + x] = (ushort)Math.Clamp((first[index] + second[index] + offset) >> shift, 0, maximum);
             }
         }
+    }
+
+    /// <summary>Loads four intermediate samples as 32 bit values.</summary>
+    /// <param name="samples">The samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> Widen(ReadOnlySpan<short> samples, int index) =>
+        Vector128.WidenLower(Vector64.Create(samples.Slice(index, Lanes)).ToVector128Unsafe());
+
+    /// <summary>Limits four values to the range of a sample and stores them.</summary>
+    /// <param name="values">The values.</param>
+    /// <param name="maximum">The largest sample value in every lane.</param>
+    /// <param name="plane">Receives the samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void StoreClamped(Vector128<int> values, Vector128<int> maximum, ushort[] plane, int index)
+    {
+        var clamped = Vector128.Min(Vector128.Max(values, Vector128<int>.Zero), maximum).AsUInt32();
+        Vector128.Narrow(clamped, clamped).GetLower().CopyTo(plane.AsSpan(index, Lanes));
     }
 
     /// <summary>Writes a prediction with explicit weights (8-275 to 8-277).</summary>

@@ -75,9 +75,8 @@ public class HyperCodecsH265TransformBenchmarks
     public int Inverse()
     {
         var side = 1 << Log2Size;
-        _source.AsSpan(0, side * side).CopyTo(_block);
         var reach = Full ? side : Math.Min(side, SparseSide);
-        H265Transform.Inverse(_block, Log2Size, Log2Size == DstLog2, BitDepth, new(reach - 1, reach - 1), _scratch);
+        H265Transform.Inverse(_source, _block, Log2Size, Log2Size == DstLog2, BitDepth, new(reach - 1, reach - 1), _scratch);
         return _block[0];
     }
 }

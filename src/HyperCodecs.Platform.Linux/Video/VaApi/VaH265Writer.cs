@@ -220,9 +220,9 @@ internal static class VaH265Writer
         ArgumentNullException.ThrowIfNull(reference);
         ArgumentNullException.ThrowIfNull(set);
         return (reference.IsLongTerm ? LongTermFlag : 0)
-            | (Array.IndexOf(set.StCurrBefore, reference) >= 0 ? StCurrBeforeFlag : 0)
-            | (Array.IndexOf(set.StCurrAfter, reference) >= 0 ? StCurrAfterFlag : 0)
-            | (Array.IndexOf(set.LtCurr, reference) >= 0 ? LtCurrFlag : 0);
+            | (set.StCurrBefore.Contains(reference) ? StCurrBeforeFlag : 0)
+            | (set.StCurrAfter.Contains(reference) ? StCurrAfterFlag : 0)
+            | (set.LtCurr.Contains(reference) ? LtCurrFlag : 0);
     }
 
     /// <summary>Writes the parameters that come from the sequence parameter set.</summary>

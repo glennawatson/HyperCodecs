@@ -2,56 +2,55 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
-using System.Runtime.CompilerServices;
-
 namespace HyperCodecs.H265;
 
 /// <summary>Works out which pictures of the buffer the current picture may refer to and marks the rest as unused (8.3.2).</summary>
 internal static class H265RpsDerivation
 {
     /// <summary>Derives the reference picture set of a picture.</summary>
+    /// <param name="set">Receives the pictures the current picture may use; it is emptied first.</param>
     /// <param name="dpb">The decoded picture buffer.</param>
     /// <param name="sps">The sequence parameter set.</param>
     /// <param name="header">The slice segment header.</param>
     /// <param name="poc">The picture order count of the current picture.</param>
     /// <param name="idr">Whether the current picture is an IDR picture, which refers to nothing.</param>
     /// <param name="makeMissing">Makes a stand-in picture with a given order count, for a reference that is not in the buffer.</param>
-    /// <returns>The pictures the current picture may use.</returns>
-    internal static H265RefPicSet Derive(H265Dpb dpb, H265Sps sps, H265SliceHeader header, int poc, bool idr, Func<int, H265Picture> makeMissing)
+    internal static void Derive(H265RefPicSet set, H265Dpb dpb, H265Sps sps, H265SliceHeader header, int poc, bool idr, Func<int, H265Picture> makeMissing)
     {
+        set.Clear();
         if (idr)
         {
             dpb.UnmarkAll();
-            return H265RefPicSet.Empty;
+            return;
         }
 
-        var keep = new HashSet<H265Picture>();
-        var longTerm = FindLongTerm(dpb, header, poc, 1 << sps.Log2MaxPocLsb, keep, makeMissing);
-        var rps = header.ShortTerm;
-        var before = FindShortTerm(dpb, rps.DeltaPocS0, rps.UsedS0, poc, keep, makeMissing);
-        var after = FindShortTerm(dpb, rps.DeltaPocS1, rps.UsedS1, poc, keep, makeMissing);
         foreach (var picture in dpb.Pictures)
         {
-            if (!keep.Contains(picture))
+            picture.IsKept = false;
+        }
+
+        FindLongTerm(set.LtCurr, dpb, header, poc, 1 << sps.Log2MaxPocLsb, makeMissing);
+        var rps = header.ShortTerm;
+        FindShortTerm(set.StCurrBefore, dpb, rps.DeltaPocS0, rps.UsedS0, poc, makeMissing);
+        FindShortTerm(set.StCurrAfter, dpb, rps.DeltaPocS1, rps.UsedS1, poc, makeMissing);
+        foreach (var picture in dpb.Pictures)
+        {
+            if (!picture.IsKept)
             {
                 picture.ReferenceState = 0;
             }
         }
-
-        return new(before, after, longTerm);
     }
 
     /// <summary>Finds the long-term pictures the slice header names, marking them long-term.</summary>
+    /// <param name="used">Receives the pictures the current picture uses.</param>
     /// <param name="dpb">The decoded picture buffer.</param>
     /// <param name="header">The slice segment header.</param>
     /// <param name="poc">The current picture order count.</param>
     /// <param name="maxLsb">The range of the low bits of the picture order count.</param>
-    /// <param name="keep">Collects every picture the set keeps.</param>
     /// <param name="makeMissing">Makes a stand-in for a missing picture.</param>
-    /// <returns>The pictures the current picture uses.</returns>
-    private static H265Picture[] FindLongTerm(H265Dpb dpb, H265SliceHeader header, int poc, int maxLsb, HashSet<H265Picture> keep, Func<int, H265Picture> makeMissing)
+    private static void FindLongTerm(List<H265Picture> used, H265Dpb dpb, H265SliceHeader header, int poc, int maxLsb, Func<int, H265Picture> makeMissing)
     {
-        var used = new List<H265Picture>();
         foreach (var entry in header.LongTerm)
         {
             var target = entry.PocLsb;
@@ -62,40 +61,52 @@ internal static class H265RpsDerivation
 
             var picture = FindReference(dpb, target, entry.MsbPresent ? -1 : maxLsb - 1) ?? CreateMissing(dpb, makeMissing, target);
             picture.ReferenceState = H265Picture.LongTerm;
-            _ = keep.Add(picture);
+            picture.IsKept = true;
             if (entry.Used)
             {
                 used.Add(picture);
             }
         }
-
-        return [.. used];
     }
 
     /// <summary>Finds the short-term pictures of one side of the set.</summary>
+    /// <param name="used">Receives the pictures the current picture uses.</param>
     /// <param name="dpb">The decoded picture buffer.</param>
     /// <param name="deltas">The picture order count distances.</param>
     /// <param name="usedFlags">Whether the current picture refers to each.</param>
     /// <param name="poc">The current picture order count.</param>
-    /// <param name="keep">Collects every picture the set keeps.</param>
     /// <param name="makeMissing">Makes a stand-in for a missing picture.</param>
-    /// <returns>The pictures the current picture uses.</returns>
-    private static H265Picture[] FindShortTerm(H265Dpb dpb, int[] deltas, bool[] usedFlags, int poc, HashSet<H265Picture> keep, Func<int, H265Picture> makeMissing)
+    private static void FindShortTerm(List<H265Picture> used, H265Dpb dpb, int[] deltas, bool[] usedFlags, int poc, Func<int, H265Picture> makeMissing)
     {
-        var used = new List<H265Picture>();
         for (var i = 0; i < deltas.Length; i++)
         {
             var target = poc + deltas[i];
-            var picture = dpb.Pictures.Find(candidate => candidate.ReferenceState == 1 && candidate.Poc == target) ?? CreateMissing(dpb, makeMissing, target);
+            var picture = FindShortTermAt(dpb, target) ?? CreateMissing(dpb, makeMissing, target);
             picture.ReferenceState = picture.ReferenceState == H265Picture.Unused ? H265Picture.ShortTerm : picture.ReferenceState;
-            _ = keep.Add(picture);
+            picture.IsKept = true;
             if (usedFlags[i])
             {
                 used.Add(picture);
             }
         }
+    }
 
-        return [.. used];
+    /// <summary>Finds a short-term reference picture by its picture order count.</summary>
+    /// <param name="dpb">The decoded picture buffer.</param>
+    /// <param name="poc">The count.</param>
+    /// <returns>The picture, or <see langword="null"/>.</returns>
+    private static H265Picture? FindShortTermAt(H265Dpb dpb, int poc)
+    {
+        var pictures = dpb.Pictures;
+        for (var i = 0; i < pictures.Count; i++)
+        {
+            if (pictures[i].ReferenceState == H265Picture.ShortTerm && pictures[i].Poc == poc)
+            {
+                return pictures[i];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Finds a picture used for reference by its picture order count.</summary>
@@ -103,9 +114,20 @@ internal static class H265RpsDerivation
     /// <param name="poc">The count, or only its low bits when a mask is given.</param>
     /// <param name="mask">A mask for the low bits to compare, or -1 to compare the whole count.</param>
     /// <returns>The picture, or <see langword="null"/>.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static H265Picture? FindReference(H265Dpb dpb, int poc, int mask) =>
-        dpb.Pictures.Find(candidate => candidate.ReferenceState != 0 && (mask < 0 ? candidate.Poc == poc : (candidate.Poc & mask) == poc));
+    private static H265Picture? FindReference(H265Dpb dpb, int poc, int mask)
+    {
+        var pictures = dpb.Pictures;
+        for (var i = 0; i < pictures.Count; i++)
+        {
+            var candidate = pictures[i];
+            if (candidate.ReferenceState != 0 && (mask < 0 ? candidate.Poc == poc : (candidate.Poc & mask) == poc))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>Makes a stand-in for a reference picture that is missing and adds it to the buffer.</summary>
     /// <param name="dpb">The decoded picture buffer.</param>

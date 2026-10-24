@@ -30,6 +30,9 @@ internal static class MatroskaBlocks
     /// <summary>The byte value that says a length in Xiph lacing continues in the next byte.</summary>
     private const int XiphContinues = 255;
 
+    /// <summary>The most frames a laced block holds: the frame count is one byte, less one.</summary>
+    private const int MaxLacedFrames = 256;
+
     /// <summary>The bits of each byte of a variable length number that carry its value.</summary>
     private const int LengthValueBits = 7;
 
@@ -106,7 +109,8 @@ internal static class MatroskaBlocks
         }
 
         var count = data[0] + 1;
-        var sizes = new int[count];
+        Span<int> sizes = stackalloc int[MaxLacedFrames];
+        sizes = sizes[..count];
         var used = ReadSizes(data, lacing, length, sizes);
         if (used < 0)
         {

@@ -280,7 +280,13 @@ internal sealed unsafe class VideoToolboxDecoder : VideoDecoder
         }
         else
         {
-            frame = new(Width, Height, time.Seconds);
+            // The callback runs on a VideoToolbox thread while the decoding thread waits in Submit, and the pool of
+            // pictures is not thread safe, so renting takes the same lock as the pending list.
+            lock (_gate)
+            {
+                frame = RentFrame(Width, Height, time.Seconds);
+            }
+
             failure = TryCopy(image, frame);
         }
 

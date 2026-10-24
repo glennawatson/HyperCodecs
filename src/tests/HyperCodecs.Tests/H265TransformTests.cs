@@ -76,8 +76,8 @@ public sealed class H265TransformTests
             }
 
             var expected = Reference(coefficients, side, testCase);
-            var actual = (int[])coefficients.Clone();
-            H265Transform.Inverse(actual, testCase.Log2Size, testCase.Dst, testCase.BitDepth, new(extentSide - 1, extentSide - 1), new int[Largest * Largest]);
+            var actual = new int[side * side];
+            H265Transform.Inverse(coefficients, actual, testCase.Log2Size, testCase.Dst, testCase.BitDepth, new(extentSide - 1, extentSide - 1), new int[Largest * Largest]);
             mismatches += expected.AsSpan().SequenceEqual(actual) ? 0 : 1;
         }
 

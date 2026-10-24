@@ -13,13 +13,46 @@ internal sealed class H265ParameterSets
     /// <summary>The picture parameter sets.</summary>
     private readonly Dictionary<int, H265Pps> _picture = [];
 
+    /// <summary>The NAL units the sequence parameter sets were read from, by number.</summary>
+    private readonly Dictionary<int, byte[]> _sequenceBytes = [];
+
+    /// <summary>The NAL units the picture parameter sets were read from, by number.</summary>
+    private readonly Dictionary<int, byte[]> _pictureBytes = [];
+
     /// <summary>Stores a sequence parameter set, replacing any with the same number.</summary>
     /// <param name="sps">The set.</param>
-    internal void Add(H265Sps sps) => _sequence[sps.Id] = sps;
+    /// <param name="nal">The NAL unit it was read from, which is kept.</param>
+    internal void Add(H265Sps sps, byte[] nal)
+    {
+        _sequence[sps.Id] = sps;
+        _sequenceBytes[sps.Id] = nal;
+    }
 
     /// <summary>Stores a picture parameter set, replacing any with the same number.</summary>
     /// <param name="pps">The set.</param>
-    internal void Add(H265Pps pps) => _picture[pps.Id] = pps;
+    /// <param name="nal">The NAL unit it was read from, which is kept.</param>
+    internal void Add(H265Pps pps, byte[] nal)
+    {
+        _picture[pps.Id] = pps;
+        _pictureBytes[pps.Id] = nal;
+    }
+
+    /// <summary>Finds whether a NAL unit is the one a stored parameter set was read from, so reading it again would give the same set.</summary>
+    /// <param name="isSequence"><see langword="true"/> for a sequence parameter set, <see langword="false"/> for a picture parameter set.</param>
+    /// <param name="nal">The NAL unit including its header.</param>
+    /// <returns><see langword="true"/> when the set is already stored.</returns>
+    internal bool IsStored(bool isSequence, ReadOnlySpan<byte> nal)
+    {
+        foreach (var stored in (isSequence ? _sequenceBytes : _pictureBytes).Values)
+        {
+            if (nal.SequenceEqual(stored))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Gets the first sequence parameter set that was added.</summary>
     /// <returns>The set, or <see langword="null"/> when none was added.</returns>

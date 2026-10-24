@@ -36,6 +36,14 @@ public class HyperCodecsAacDecodeBenchmarks
         _noise = SoundClip.Load(NoiseFile);
     }
 
+    /// <summary>Lets go of the decoders.</summary>
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _music?.Dispose();
+        _noise?.Dispose();
+    }
+
     /// <summary>Decodes the music clip.</summary>
     /// <returns>The samples decoded.</returns>
     [Benchmark]

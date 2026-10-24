@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using HyperCodecs;
 using HyperCodecs.Video;
 
@@ -148,7 +149,7 @@ internal sealed unsafe class VaDecoderSession : IDisposable
     {
         try
         {
-            var buffers = _buffers.ToArray();
+            var buffers = CollectionsMarshal.AsSpan(_buffers);
             fixed (uint* pointer = buffers)
             {
                 Require(NativeMethods.RenderPicture(_display.Display, _context, pointer, buffers.Length), "submit a picture");
