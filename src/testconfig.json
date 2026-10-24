@@ -1,0 +1,24 @@
+{
+    "platform": {
+        "execution": {
+            "parallel": false
+        }
+    },
+    "codeCoverage": {
+        "Configuration": {
+            "Format": "cobertura",
+            "CodeCoverage": {
+                "SkipAutoProperties": true,
+                "ModulePaths": {
+                    "Include": [
+                        "HyperCodecs.*"
+                    ],
+                    "Exclude": [
+                        ".*Tests\\.dll$",
+                        ".*TestRunner.*"
+                    ]
+                }
+            }
+        }
+    }
+}

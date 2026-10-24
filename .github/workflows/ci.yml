@@ -1,0 +1,57 @@
+name: Build
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+jobs:
+  build:
+    name: Build and test
+    uses: glennawatson/actions-common/.github/workflows/workflow-common-setup-and-build.yml@315788024be8e61daa4f2b957e6476746211b522 # main
+    with:
+      srcFolder: 'src'
+      solutionFile: HyperCodecs.slnx
+      minverTagPrefix: ''
+      uploadCodecov: false
+      testTimeout: '25m'
+      dotnetVersions: |
+        11.x
+        10.x
+  tests:
+    name: Tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
+          - name: Windows x64
+            os: windows-latest
+          - name: Windows arm64
+            os: windows-11-arm
+          - name: macOS arm64
+            os: macos-latest
+          - name: macOS x64
+            os: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Setup .NET
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
+        with:
+          src-folder: 'src'
+          stamp-version: 'false'
+          dotnet-versions: |
+            11.x
+            10.x
+      - name: Test on net10.0 and net11.0
+        working-directory: src
+        run: dotnet test --solution HyperCodecs.slnx -c Release -v q --nologo

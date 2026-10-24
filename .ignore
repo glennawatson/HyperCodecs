@@ -1,0 +1,30 @@
+# Build and test outputs
+**/[Bb]in/
+**/[Oo]bj/
+**/[Tt]est[Rr]esult*/
+BenchmarkDotNet.Artifacts/
+BenchmarkDotNet.Comparison/
+.bdn/
+artifacts/
+.artifacts/
+publish/
+*.binlog
+*.trx
+*.coverage
+*.coveragexml
+*.snap
+*.received.*
+
+# Binary media fixtures and their reference checksums
+*.flac
+*.mp3
+*.ogg
+*.opus
+*.m4a
+*.mp4
+*.aac
+*.mkv
+*.webm
+*.wav
+*.sha256
+src/tests/HyperCodecs.Tests/Fixtures/

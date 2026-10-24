@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/HyperCodecs.Benchmarks/HyperCodecs.Benchmarks.csproj" />
+    <Project Path="benchmarks/HyperCodecs.Benchmarks.Generator/HyperCodecs.Benchmarks.Generator.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="HyperCodecs/HyperCodecs.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HyperCodecs.Tests/HyperCodecs.Tests.csproj" />
+  </Folder>
+</Solution>

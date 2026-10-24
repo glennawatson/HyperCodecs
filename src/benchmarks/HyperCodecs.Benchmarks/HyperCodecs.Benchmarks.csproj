@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>$(LibraryTargetFrameworks)</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <Description>Allocation and throughput benchmarks for HyperCodecs.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
+  </ItemGroup>
+
+  <!-- Lists the benchmarks for the allocation harness, so no reflection finds or calls them. -->
+  <ItemGroup>
+    <ProjectReference Include="..\HyperCodecs.Benchmarks.Generator\HyperCodecs.Benchmarks.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" />
+  </ItemGroup>
+
+  <!-- Short files coded by each layer, which the decoding benchmarks decode. -->
+  <ItemGroup>
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\opus-stereo-music.opus" Link="Fixtures\opus-stereo-music.opus" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\silk-mono-wb-20ms.opus" Link="Fixtures\silk-mono-wb-20ms.opus" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\opus-mono-voip.opus" Link="Fixtures\opus-mono-voip.opus" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\aac-lc-stereo-44100.m4a" Link="Fixtures\aac-lc-stereo-44100.m4a" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\aac-lc-noise-24k.m4a" Link="Fixtures\aac-lc-noise-24k.m4a" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\av-h264-aac-text.mp4" Link="Fixtures\av-h264-aac-text.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\aac-lc-stereo-fragmented.mp4" Link="Fixtures\aac-lc-stereo-fragmented.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\av-h264-aac-text.mkv" Link="Fixtures\av-h264-aac-text.mkv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h264-intra-baseline.mp4" Link="Fixtures\h264-intra-baseline.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h264-intra-cabac.mp4" Link="Fixtures\h264-intra-cabac.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Predicted H.264 and H.265 files, which the video decoding benchmarks decode. -->
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h264-p-cabac.mp4" Link="Fixtures\h264-p-cabac.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h264-b-cabac-deblock.mp4" Link="Fixtures\h264-b-cabac-deblock.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h265-intra.mp4" Link="Fixtures\h265-intra.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h265-p.mp4" Link="Fixtures\h265-p.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h265-b.mp4" Link="Fixtures\h265-b.mp4" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\tests\HyperCodecs.Tests\Fixtures\h265-loop-filters-ctu32.mp4" Link="Fixtures\h265-loop-filters-ctu32.mp4" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
