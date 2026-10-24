@@ -11,7 +11,7 @@ namespace HyperCodecs.H265;
 internal sealed class H265SliceRefs
 {
     /// <summary>The most pictures a reference list holds.</summary>
-    private const int MaxReferences = 16;
+    internal const int MaxReferences = 16;
 
     /// <summary>Gets the order count of each picture in list 0.</summary>
     internal int[] Poc0 { get; } = new int[MaxReferences];

@@ -24,6 +24,9 @@ internal readonly ref struct H265MvpSearch
     /// <summary>The picture the vector is for.</summary>
     private readonly H265Picture _target;
 
+    /// <summary>Whether that picture is a long-term picture.</summary>
+    private readonly bool _targetLong;
+
     /// <summary>Initializes a new instance of the <see cref="H265MvpSearch"/> struct.</summary>
     /// <param name="context">The slice context.</param>
     /// <param name="block">The prediction block.</param>
@@ -35,6 +38,7 @@ internal readonly ref struct H265MvpSearch
         _block = block;
         _list = list;
         _target = (list == 0 ? context.RefList0 : context.RefList1)[refIdx];
+        _targetLong = context.IsLongTerm(list, refIdx);
         var area = block.Area;
         IsScaled = H265PuAvailability.IsAvailable(context, block, area.X - 1, area.Y + area.Height)
             || H265PuAvailability.IsAvailable(context, block, area.X - 1, area.Y + area.Height - 1);
@@ -143,7 +147,7 @@ internal readonly ref struct H265MvpSearch
         }
 
         var motion = _context.Picture.Motion[_context.Picture.GridIndex(x, y)];
-        var targetLong = _target.IsLongTerm;
+        var targetLong = _targetLong;
         for (var step = 0; step < ListCount; step++)
         {
             var list = step == 0 ? _list : 1 - _list;
@@ -153,7 +157,7 @@ internal readonly ref struct H265MvpSearch
             }
 
             var neighbour = RefPicture(list, RefIdxOf(motion, list));
-            if (neighbour.IsLongTerm != targetLong)
+            if (_context.IsLongTerm(list, RefIdxOf(motion, list)) != targetLong)
             {
                 continue;
             }

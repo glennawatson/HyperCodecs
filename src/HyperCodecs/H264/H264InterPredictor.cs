@@ -42,6 +42,12 @@ internal sealed class H264InterPredictor
     /// <summary>The largest sample value.</summary>
     private const int MaxSample = 255;
 
+    /// <summary>The shift of a luma motion vector to whole samples.</summary>
+    private const int VectorFractionBits = 2;
+
+    /// <summary>The lines below a block that the luma interpolation reads.</summary>
+    private const int FilterReach = 3;
+
     /// <summary>The samples weighted at a time by the vector path.</summary>
     private const int EightSamples = 8;
 
@@ -81,16 +87,10 @@ internal sealed class H264InterPredictor
     /// <summary>The weights the slice sent, or <see langword="null"/>.</summary>
     private readonly H264WeightTable? _table;
 
-    /// <summary>The luma samples predicted from list 0 when a block uses both lists.</summary>
-    private readonly byte[] _luma0;
-
-    /// <summary>The luma samples predicted from list 1.</summary>
+    /// <summary>The luma samples predicted from list 1 when a block uses both lists.</summary>
     private readonly byte[] _luma1;
 
-    /// <summary>The Cb and Cr samples predicted from list 0, one plane after the other.</summary>
-    private readonly byte[] _chroma0;
-
-    /// <summary>The Cb and Cr samples predicted from list 1.</summary>
+    /// <summary>The Cb and Cr samples predicted from list 1, one plane after the other.</summary>
     private readonly byte[] _chroma1;
 
     /// <summary>Initializes a new instance of the <see cref="H264InterPredictor"/> class.</summary>
@@ -103,11 +103,13 @@ internal sealed class H264InterPredictor
         _picture = picture;
         _mode = mode;
         _table = table;
-        _luma0 = work.Luma0;
         _luma1 = work.Luma1;
-        _chroma0 = work.Chroma0;
         _chroma1 = work.Chroma1;
+        Tokens = work.Tokens;
     }
+
+    /// <summary>Gets the tokens the thread gives up while it waits for another picture, or <see langword="null"/> when it holds none.</summary>
+    internal WorkTokens? Tokens { get; }
 
     /// <summary>Works out the distance scale factor that temporal direct prediction and implicit weights use (8-196 to 8-201).</summary>
     /// <param name="current">The picture order count of the picture being decoded.</param>
@@ -148,27 +150,25 @@ internal sealed class H264InterPredictor
         }
     }
 
-    /// <summary>Combines two predictions of a block into the picture.</summary>
-    /// <param name="first">The first prediction's plane.</param>
-    /// <param name="second">The second prediction's plane.</param>
-    /// <param name="target">Where the result goes in the picture.</param>
-    /// <param name="block">The block's position and size in the scratch planes.</param>
+    /// <summary>Combines the first prediction of a block, which is already in the picture, with the second, which is in a scratch plane, and leaves the result in the picture.</summary>
+    /// <param name="picture">Where the first prediction is and the result goes: the block's first sample in the picture.</param>
+    /// <param name="second">Where the second prediction is: the block's first sample in the scratch plane.</param>
+    /// <param name="size">The block's width and height; its position is not used.</param>
     /// <param name="weights">The weights to combine with.</param>
-    private static void Combine(byte[] first, byte[] second, H264PlaneTarget target, BlockRect block, H264PlaneWeights weights)
+    private static void Combine(H264PlaneTarget picture, H264PlaneTarget second, BlockRect size, H264PlaneWeights weights)
     {
-        var scratchStride = first.Length == MacroblockSize * MacroblockSize ? MacroblockSize : ChromaMacroblockSize;
         var offset = (weights.Offset + 1) >> 1;
-        for (var row = 0; row < block.Height; row++)
+        for (var row = 0; row < size.Height; row++)
         {
-            var source = ((block.Y + row) * scratchStride) + block.X;
-            var destination = ((target.Y + row) * target.Stride) + target.X;
+            var target = picture.Plane.AsSpan(((picture.Y + row) * picture.Stride) + picture.X, size.Width);
+            var other = second.Plane.AsSpan(((second.Y + row) * second.Stride) + second.X, size.Width);
             if (!weights.Weighted)
             {
-                AverageRow(first.AsSpan(source, block.Width), second.AsSpan(source, block.Width), target.Plane.AsSpan(destination, block.Width));
+                AverageRow(target, other, target);
                 continue;
             }
 
-            WeightRow(first.AsSpan(source, block.Width), second.AsSpan(source, block.Width), target.Plane.AsSpan(destination, block.Width), weights, offset);
+            WeightRow(target, other, target, weights, offset);
         }
     }
 
@@ -253,14 +253,17 @@ internal sealed class H264InterPredictor
     /// <param name="lumaTarget">Where the luma samples go.</param>
     /// <param name="blueTarget">Where the Cb samples go.</param>
     /// <param name="redTarget">Where the Cr samples go.</param>
-    private static void PredictInto(H264ListMotion motion, BlockRect luma, H264PlaneTarget lumaTarget, H264PlaneTarget blueTarget, H264PlaneTarget redTarget)
+    private void PredictInto(H264ListMotion motion, BlockRect luma, H264PlaneTarget lumaTarget, H264PlaneTarget blueTarget, H264PlaneTarget redTarget)
     {
         var reference = motion.Ref!.Picture;
-        H264MotionCompensation.PredictLuma(reference, lumaTarget, luma, motion.Vector);
+
+        // The block reads up to three lines below itself, and the chroma interpolation never reaches further down than that in luma terms.
+        reference.WaitForLines(Math.Min(luma.Y + (motion.Vector.Y >> VectorFractionBits) + luma.Height + FilterReach, reference.LumaLines - 1), Tokens);
+        H264LumaInterpolation.Predict(reference, lumaTarget, luma, motion.Vector);
         var rows = reference.MbHeight * H264Picture.ChromaSize;
         var chroma = new BlockRect(luma.X / ChromaRatio, luma.Y / ChromaRatio, luma.Width / ChromaRatio, luma.Height / ChromaRatio);
-        H264MotionCompensation.PredictChroma(reference.Cb, reference.ChromaStride, rows, blueTarget, chroma, motion.Vector);
-        H264MotionCompensation.PredictChroma(reference.Cr, reference.ChromaStride, rows, redTarget, chroma, motion.Vector);
+        H264ChromaInterpolation.Predict(reference.Cb, reference.ChromaStride, rows, blueTarget, chroma, motion.Vector);
+        H264ChromaInterpolation.Predict(reference.Cr, reference.ChromaStride, rows, redTarget, chroma, motion.Vector);
     }
 
     /// <summary>Applies explicit weights to a block already predicted into the picture.</summary>
@@ -280,19 +283,23 @@ internal sealed class H264InterPredictor
     /// <param name="prediction">The motion of both lists.</param>
     private void Bidirectional(BlockRect luma, BlockRect inMacroblock, in H264BlockPrediction prediction)
     {
-        var lumaX = inMacroblock.X;
-        var lumaY = inMacroblock.Y;
-        var chromaX = lumaX / ChromaRatio;
-        var chromaY = lumaY / ChromaRatio;
+        // The first list is predicted straight into the picture and the second into the scratch planes, which are then blended into the picture,
+        // so only one of the two predictions makes the extra trip through a scratch plane.
+        var chromaX = inMacroblock.X / ChromaRatio;
+        var chromaY = inMacroblock.Y / ChromaRatio;
         var redRow = chromaY + ChromaMacroblockSize;
-        PredictInto(prediction.L0, luma, new(_luma0, MacroblockSize, lumaX, lumaY), new(_chroma0, ChromaMacroblockSize, chromaX, chromaY), new(_chroma0, ChromaMacroblockSize, chromaX, redRow));
-        PredictInto(prediction.L1, luma, new(_luma1, MacroblockSize, lumaX, lumaY), new(_chroma1, ChromaMacroblockSize, chromaX, chromaY), new(_chroma1, ChromaMacroblockSize, chromaX, redRow));
+        var lumaTarget = new H264PlaneTarget(_picture.Luma, _picture.LumaStride, luma.X, luma.Y);
+        var blueTarget = new H264PlaneTarget(_picture.Cb, _picture.ChromaStride, luma.X / ChromaRatio, luma.Y / ChromaRatio);
+        var redTarget = blueTarget with { Plane = _picture.Cr };
+        PredictInto(prediction.L0, luma, lumaTarget, blueTarget, redTarget);
+        var lumaScratch = new H264PlaneTarget(_luma1, MacroblockSize, inMacroblock.X, inMacroblock.Y);
+        var blueScratch = new H264PlaneTarget(_chroma1, ChromaMacroblockSize, chromaX, chromaY);
+        PredictInto(prediction.L1, luma, lumaScratch, blueScratch, blueScratch with { Y = redRow });
         var weights = BiWeights(prediction);
-        Combine(_luma0, _luma1, new(_picture.Luma, _picture.LumaStride, luma.X, luma.Y), inMacroblock, weights.Luma);
-        var chroma = new BlockRect(chromaX, chromaY, luma.Width / ChromaRatio, luma.Height / ChromaRatio);
-        var target = new H264PlaneTarget(_picture.Cb, _picture.ChromaStride, luma.X / ChromaRatio, luma.Y / ChromaRatio);
-        Combine(_chroma0, _chroma1, target, chroma, weights.Cb);
-        Combine(_chroma0, _chroma1, target with { Plane = _picture.Cr }, chroma with { Y = redRow }, weights.Cr);
+        var chroma = new BlockRect(0, 0, luma.Width / ChromaRatio, luma.Height / ChromaRatio);
+        Combine(lumaTarget, lumaScratch, new(0, 0, luma.Width, luma.Height), weights.Luma);
+        Combine(blueTarget, blueScratch, chroma, weights.Cb);
+        Combine(redTarget, blueScratch with { Y = redRow }, chroma, weights.Cr);
     }
 
     /// <summary>Works out the weights for a block predicted from both lists.</summary>

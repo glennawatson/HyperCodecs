@@ -57,6 +57,7 @@ internal static class H265TemporalMotion
     private static bool TryColocated(H265SliceContext context, H265Picture colPic, int x, int y, int list, int refIdx, out MotionVector vector)
     {
         vector = default;
+        colPic.WaitForDecodedRow(y >> context.Layout.CtbLog2, context.Tokens);
         var index = colPic.GridIndex(x, y);
         if (colPic.Kind[index] != H265Picture.Inter)
         {
@@ -72,7 +73,7 @@ internal static class H265TemporalMotion
         var colRefPoc = colList == 0 ? slice.Poc0[refIdxCol] : slice.Poc1[refIdxCol];
         var colRefLong = colList == 0 ? slice.LongTerm0[refIdxCol] : slice.LongTerm1[refIdxCol];
         var target = (list == 0 ? context.RefList0 : context.RefList1)[refIdx];
-        var currentLong = target.IsLongTerm;
+        var currentLong = context.IsLongTerm(list, refIdx);
         if (currentLong != colRefLong)
         {
             return false;

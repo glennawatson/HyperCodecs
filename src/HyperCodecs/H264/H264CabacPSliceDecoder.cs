@@ -117,6 +117,7 @@ internal sealed class H264CabacPSliceDecoder
             }
 
             DecodeMacroblock(ref engine, rbsp, address);
+            H264Deblocking.MacroblockDecoded(_picture, address);
             address++;
         }
         while (engine.DecodeTerminate() == 0 && !engine.IsOverrun);

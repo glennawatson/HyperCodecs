@@ -16,25 +16,33 @@ internal static class H265Deblocking
     /// <summary>The chroma samples between two edges that are filtered.</summary>
     private const int ChromaGrid = 8;
 
-    /// <summary>Filters a picture.</summary>
-    /// <param name="context">The slice context of the picture.</param>
-    internal static void Apply(H265SliceContext context)
-    {
-        Pass(context, true);
-        Pass(context, false);
-    }
-
-    /// <summary>Filters all the edges of one direction.</summary>
+    /// <summary>
+    /// Filters the edges of one row of coding tree blocks: its vertical edges, then its horizontal edges, including the one along its top. The edges are
+    /// eight samples apart and a filter changes at most three samples either side of its edge, so no two edges of a direction touch the same sample. The
+    /// vertical edges of the row above are already filtered, and the horizontal edge along the top reads the four lines above it, which no edge of the row
+    /// above changes, so filtering the rows from the top down gives what filtering every vertical edge and then every horizontal edge does.
+    /// </summary>
     /// <param name="context">The slice context.</param>
-    /// <param name="vertical">Whether to filter vertical edges.</param>
-    private static void Pass(H265SliceContext context, bool vertical)
+    /// <param name="ctbRow">The row of coding tree blocks.</param>
+    internal static void FilterRow(H265SliceContext context, int ctbRow)
     {
         var picture = context.Picture;
-        for (var by = vertical ? 0 : EdgeSpacing; by < picture.GridHeight; by += vertical ? 1 : EdgeSpacing)
+        var rowBlocks = 1 << (context.Layout.CtbLog2 - H265Picture.GridLog2);
+        var first = ctbRow * rowBlocks;
+        var end = Math.Min(first + rowBlocks, picture.GridHeight);
+        for (var by = first; by < end; by++)
         {
-            for (var bx = vertical ? EdgeSpacing : 0; bx < picture.GridWidth; bx += vertical ? EdgeSpacing : 1)
+            for (var bx = EdgeSpacing; bx < picture.GridWidth; bx += EdgeSpacing)
             {
-                FilterEdge(context, bx, by, vertical);
+                FilterEdge(context, bx, by, true);
+            }
+        }
+
+        for (var by = Math.Max(first, EdgeSpacing); by < end; by += EdgeSpacing)
+        {
+            for (var bx = 0; bx < picture.GridWidth; bx++)
+            {
+                FilterEdge(context, bx, by, false);
             }
         }
     }

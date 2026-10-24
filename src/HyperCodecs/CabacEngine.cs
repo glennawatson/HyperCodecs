@@ -108,6 +108,7 @@ internal ref struct CabacEngine
     /// <summary>Decodes one bin with a context (clause 9.3.3.2.1).</summary>
     /// <param name="ctxIdx">The context index, not 276.</param>
     /// <returns>The bin, 0 or 1.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int DecodeDecision(int ctxIdx)
     {
         int context = _contexts[ctxIdx];

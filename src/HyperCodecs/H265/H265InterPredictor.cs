@@ -7,6 +7,9 @@ namespace HyperCodecs.H265;
 /// <summary>Predicts the samples of a prediction block from its reference pictures and writes them to the picture (8.5.3.3).</summary>
 internal static class H265InterPredictor
 {
+    /// <summary>The lines below a block that the interpolation filters read.</summary>
+    private const int FilterReach = 4;
+
     /// <summary>The bits of the fraction of a luma vector.</summary>
     private const int LumaFractionBits = 2;
 
@@ -73,6 +76,10 @@ internal static class H265InterPredictor
         var planeHeight = component == 0 ? reference.Height : reference.ChromaHeight;
         var source = new BlockRect(area.X + move.WholeX, area.Y + move.WholeY, area.Width, area.Height);
         var bitDepth = component == 0 ? sps.BitDepthLuma : sps.BitDepthChroma;
+
+        // The filter reads up to four lines below the block; a line of a chroma plane stands for the luma lines that cover it.
+        var linesPerRow = component == 0 ? 1 : sps.SubHeightC;
+        reference.WaitForLines(Math.Min(((source.Y + source.Height + FilterReach) * linesPerRow) + linesPerRow - 1, reference.Height - 1), context.Tokens);
         var job = new H265InterpolationJob(reference.PlaneOf(component), reference.StrideOf(component), planeHeight, source, move.FractionX, move.FractionY, bitDepth, component != 0);
         H265Interpolation.Run(job, context.Prediction, destination);
     }

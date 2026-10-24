@@ -50,24 +50,35 @@ internal static class H265Sao
     /// <summary>Gets the vertical offsets of the two neighbours of each edge class, first neighbours then second (Table 8-13).</summary>
     private static ReadOnlySpan<sbyte> VerticalOffsets => [0, -1, -1, -1, 0, 1, 1, 1];
 
-    /// <summary>Applies the offsets to every coding tree block that asks for them.</summary>
+    /// <summary>
+    /// Applies the offsets to one row of coding tree blocks. Each block reads the deblocked copy of the plane that the filtering keeps, which holds the
+    /// deblocked samples of the row, the line above it and the line below it, and writes only its own samples.
+    /// </summary>
     /// <param name="context">The slice context of the picture.</param>
-    internal static void Apply(H265SliceContext context)
+    /// <param name="ctbRow">The row of coding tree blocks.</param>
+    internal static void FilterRow(H265SliceContext context, int ctbRow)
     {
-        if (!context.Sps.Tools.SaoEnabled)
-        {
-            return;
-        }
-
-        var picture = context.Picture;
-        var layout = context.Layout;
         var components = context.HasChroma ? H265SaoParams.Components : 1;
         for (var component = 0; component < components; component++)
         {
-            var plane = picture.PlaneOf(component);
-            var source = context.SaoSource;
-            plane.CopyTo(source, 0);
-            for (var ctb = 0; ctb < layout.CtbCount; ctb++)
+            ApplyRows(context, component, context.SaoSources[component], ctbRow, context.Layout.HeightInCtbs);
+        }
+    }
+
+    /// <summary>Applies the offsets to every n-th row of coding tree blocks of one colour component.</summary>
+    /// <param name="context">The slice context of the picture.</param>
+    /// <param name="component">The colour component.</param>
+    /// <param name="source">The deblocked samples of the plane.</param>
+    /// <param name="first">The first row of coding tree blocks.</param>
+    /// <param name="step">The distance between the rows.</param>
+    private static void ApplyRows(H265SliceContext context, int component, ushort[] source, int first, int step)
+    {
+        var picture = context.Picture;
+        var layout = context.Layout;
+        var plane = picture.PlaneOf(component);
+        for (var row = first; row < layout.HeightInCtbs; row += step)
+        {
+            for (var ctb = row * layout.WidthInCtbs; ctb < (row + 1) * layout.WidthInCtbs; ctb++)
             {
                 var offset = (ctb * H265SaoParams.IntsPerCtb) + (component * H265SaoParams.IntsPerComponent);
                 if (picture.Sao[offset] == H265SaoParams.None || picture.HeaderOfCtb[ctb] is null)

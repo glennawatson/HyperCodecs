@@ -41,6 +41,7 @@ internal static class H265SliceDecoder
                 throw new InvalidDataException("An H.265 slice is cut short.");
             }
 
+            H265LoopFilter.CtbDecoded(context, rs);
             StoreWavefront(context, ts, rs);
             var end = engine.DecodeTerminate() == 1;
             ts++;

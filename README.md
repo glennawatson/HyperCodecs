@@ -47,6 +47,8 @@ while (container.ReadPacket(packet))
 
 Video works the same way with `VideoDecoders.Create` and a `List<VideoFrame>` for the output. Give frames back with `VideoDecoder.Recycle` so the decoder can reuse their planes.
 
+The managed H.264 and H.265 decoders use one thread by default. Set `VideoDecoder.MaxThreads` to let them decode several pictures at once, each picture waiting only for the rows of the pictures it refers to. Pictures are the same whatever the number, but each comes back a few calls to `Decode` later, so call `Flush` at the end of the stream. A decoder keeps its threads until it is disposed.
+
 ## Sound output and hardware video
 
 Two optional packages talk to the operating system. A missing library or device is reported and the managed decoders stay as the fallback.

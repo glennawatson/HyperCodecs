@@ -31,6 +31,23 @@ public abstract class VideoDecoder : IDisposable
     /// <summary>Gets the height of the pictures in pixels.</summary>
     public int Height { get; }
 
+    /// <summary>
+    /// Gets or sets the most threads the decoder may use. The default is 1: the decoder uses the thread that calls it and no other. With more, the decoder
+    /// keeps threads waiting between pictures until it is disposed. Pictures come out the same whatever the number. A decoder that works on several pictures
+    /// at once (H.264 and H.265 reconstructed here) gives each picture back a few calls to <c>Decode</c> later than it otherwise would, and <c>Flush</c> gives
+    /// back the rest. A damaged picture reports its error when the picture would have been given back, not when its packet is decoded.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is less than 1.</exception>
+    public int MaxThreads
+    {
+        get;
+        set
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            field = value;
+        }
+    } = 1;
+
     /// <inheritdoc/>
     public void Dispose()
     {

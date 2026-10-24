@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace HyperCodecs.H265;
 
@@ -20,7 +21,7 @@ internal sealed class H265SliceContext
     /// <param name="prediction">The work areas of inter prediction, which the decoder keeps from picture to picture.</param>
     internal H265SliceContext(H265PredictionBuffers prediction)
     {
-        SaoSource = [];
+        SaoSources = [[], [], []];
         Sps = null!;
         Pps = null!;
         Layout = null!;
@@ -38,8 +39,17 @@ internal sealed class H265SliceContext
         ChromaModes = new int[4];
     }
 
-    /// <summary>Gets the work area that holds a copy of a plane while sample adaptive offset reads it.</summary>
-    internal ushort[] SaoSource { get; private set; }
+    /// <summary>Initializes a new instance of the <see cref="H265SliceContext"/> class for a worker thread.</summary>
+    /// <param name="prediction">The work areas of inter prediction.</param>
+    /// <param name="tokens">The tokens the thread gives up while it waits for another picture.</param>
+    internal H265SliceContext(H265PredictionBuffers prediction, WorkTokens tokens)
+        : this(prediction) => Tokens = tokens;
+
+    /// <summary>Gets the tokens the thread gives up while it waits for another picture, or <see langword="null"/> when it holds none.</summary>
+    internal WorkTokens? Tokens { get; }
+
+    /// <summary>Gets the work areas that hold a copy of each plane while sample adaptive offset reads it, which the context keeps from picture to picture.</summary>
+    internal ushort[][] SaoSources { get; }
 
     /// <summary>Gets the sequence parameter set.</summary>
     internal H265Sps Sps { get; private set; }
@@ -73,6 +83,12 @@ internal sealed class H265SliceContext
 
     /// <summary>Gets a work area that holds the initial reference list before it is reordered.</summary>
     internal List<H265Picture> RefInitial { get; } = [];
+
+    /// <summary>Gets whether each picture of reference list 0 was a long-term picture when the slice was read; the marking of the pictures can change before the slice is decoded.</summary>
+    internal bool[] RefLong0 { get; } = new bool[H265SliceRefs.MaxReferences];
+
+    /// <summary>Gets whether each picture of reference list 1 was a long-term picture when the slice was read.</summary>
+    internal bool[] RefLong1 { get; } = new bool[H265SliceRefs.MaxReferences];
 
     /// <summary>Gets the context variables.</summary>
     internal byte[] Contexts { get; }
@@ -137,15 +153,44 @@ internal sealed class H265SliceContext
     /// <summary>Gets a value indicating whether the picture has any chroma.</summary>
     internal bool HasChroma => Sps.ChromaArrayType != ChromaSampling.Monochrome;
 
+    /// <summary>Tells whether a picture of a reference list is a long-term picture, as it was when the slice was read.</summary>
+    /// <param name="list">The reference list, 0 or 1.</param>
+    /// <param name="refIdx">The index in that list.</param>
+    /// <returns><see langword="true"/> for a long-term picture.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool IsLongTerm(int list, int refIdx) => (list == 0 ? RefLong0 : RefLong1)[refIdx];
+
+    /// <summary>Gets the context ready to decode a slice that was read earlier: its header and its reference lists.</summary>
+    /// <param name="slice">The slice.</param>
+    internal void LoadSlice(H265SliceJob slice)
+    {
+        Header = slice.Header;
+        SliceIndex = slice.SliceIndex;
+        NoBackwardPred = slice.NoBackwardPred;
+        RefList0.Clear();
+        RefList0.AddRange(slice.List0);
+        RefList1.Clear();
+        RefList1.AddRange(slice.List1);
+        slice.LongTerm0.AsSpan().CopyTo(RefLong0);
+        slice.LongTerm1.AsSpan().CopyTo(RefLong1);
+    }
+
     /// <summary>Starts the context on a new picture, clearing what the last picture left.</summary>
     /// <param name="sps">The sequence parameter set.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="layout">The picture layout.</param>
     /// <param name="picture">The picture being decoded.</param>
-    /// <param name="saoSource">A work area at least as long as the luma plane, which the decoder keeps from picture to picture.</param>
-    internal void Begin(H265Sps sps, H265Pps pps, H265PictureLayout layout, H265Picture picture, ushort[] saoSource)
+    internal void Begin(H265Sps sps, H265Pps pps, H265PictureLayout layout, H265Picture picture)
     {
-        SaoSource = saoSource;
+        for (var component = 0; component < SaoSources.Length; component++)
+        {
+            var length = picture.PlaneOf(component).Length;
+            if (SaoSources[component].Length < length)
+            {
+                SaoSources[component] = new ushort[length];
+            }
+        }
+
         Sps = sps;
         Pps = pps;
         Layout = layout;

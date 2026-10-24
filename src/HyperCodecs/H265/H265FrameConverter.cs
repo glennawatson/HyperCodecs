@@ -33,7 +33,8 @@ internal static class H265FrameConverter
     internal static VideoFrame Convert(H265Picture picture, H265Sps sps, VideoFrame frame)
     {
         var shown = ShownSize(sps);
-        CopyPlane(picture.Luma, picture.Width, shown, 1, 1, frame.Y, sps.BitDepthLuma);
+        var luma = new H265ConvertPlane(picture.Luma, picture.Width, shown, 1, 1, frame.Y, sps.BitDepthLuma);
+        CopyRows(luma);
         if (sps.ChromaFormat == ChromaSampling.Monochrome)
         {
             Array.Fill(frame.U, NeutralChroma);
@@ -44,21 +45,17 @@ internal static class H265FrameConverter
         var subW = sps.SubWidthC;
         var subH = sps.SubHeightC;
         var area = new BlockRect(shown.X / subW, shown.Y / subH, frame.ChromaWidth, frame.ChromaHeight);
-        CopyPlane(picture.Cb, picture.ChromaWidth, area, OutputSubsampling / subW, OutputSubsampling / subH, frame.U, sps.BitDepthChroma);
-        CopyPlane(picture.Cr, picture.ChromaWidth, area, OutputSubsampling / subW, OutputSubsampling / subH, frame.V, sps.BitDepthChroma);
+        var blue = new H265ConvertPlane(picture.Cb, picture.ChromaWidth, area, OutputSubsampling / subW, OutputSubsampling / subH, frame.U, sps.BitDepthChroma);
+        CopyRows(blue);
+        CopyRows(blue with { Plane = picture.Cr, Target = frame.V });
         return frame;
     }
 
-    /// <summary>Copies an area of a plane, reducing the samples to 8 bits.</summary>
-    /// <param name="plane">The source plane.</param>
-    /// <param name="stride">The samples in a row of the source.</param>
-    /// <param name="area">The area to copy, in source samples (the width and height are those of the output).</param>
-    /// <param name="stepX">The source columns between output columns.</param>
-    /// <param name="stepY">The source rows between output rows.</param>
-    /// <param name="target">The output plane, row after row with no padding.</param>
-    /// <param name="bitDepth">The bit depth of the source.</param>
-    private static void CopyPlane(ushort[] plane, int stride, BlockRect area, int stepX, int stepY, byte[] target, int bitDepth)
+    /// <summary>Copies the rows of an area of a plane, reducing the samples to 8 bits.</summary>
+    /// <param name="copy">The plane, the area to copy, its steps and the output.</param>
+    private static void CopyRows(in H265ConvertPlane copy)
     {
+        var (plane, stride, area, stepX, stepY, target, bitDepth) = copy;
         var shift = bitDepth - OutputBits;
         var round = shift > 0 ? 1 << (shift - 1) : 0;
         for (var row = 0; row < area.Height; row++)

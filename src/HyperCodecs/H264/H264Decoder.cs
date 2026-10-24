@@ -31,6 +31,9 @@ public sealed class H264Decoder : VideoDecoder
     /// <summary>The pixels in a crop unit of 4:2:0 video.</summary>
     private const int CropUnit = 2;
 
+    /// <summary>The threads kept for each thread the caller allows to run: pictures that wait for the pictures they refer to sleep, and the others take their place.</summary>
+    private const int ThreadsPerToken = 2;
+
     /// <summary>The parameter sets received so far.</summary>
     private readonly H264ParameterSets _sets = new();
 
@@ -43,8 +46,17 @@ public sealed class H264Decoder : VideoDecoder
     /// <summary>The pictures made so far, which are decoded into again once no later picture can refer to them.</summary>
     private readonly List<H264Picture> _pool = [];
 
-    /// <summary>The working memory every slice uses, kept so slices do not allocate it.</summary>
+    /// <summary>The working memory every slice uses when the decoder runs a picture on the thread that reads its packet, kept so slices do not allocate it.</summary>
     private readonly H264SliceWork _work = new();
+
+    /// <summary>The picture jobs that are done and free to be used again.</summary>
+    private readonly Stack<H264PictureJob> _idleJobs = new();
+
+    /// <summary>The jobs given to the worker threads and not yet waited for, oldest first.</summary>
+    private readonly Queue<H264PictureJob> _inFlight = new();
+
+    /// <summary>The frames that have left the reordering queue, in output order, and wait for the pictures that fill them.</summary>
+    private readonly List<VideoFrame> _ready = [];
 
     /// <summary>The frames kept as references for inter prediction.</summary>
     private readonly H264Dpb _dpb = new();
@@ -58,8 +70,14 @@ public sealed class H264Decoder : VideoDecoder
     /// <summary>The payload of the NAL unit being decoded.</summary>
     private byte[] _rbsp = new byte[1_024];
 
-    /// <summary>The picture being decoded, or <see langword="null"/> between pictures.</summary>
-    private H264Picture? _picture;
+    /// <summary>The threads that decode pictures, or <see langword="null"/> when pictures are decoded on the thread that reads their packets.</summary>
+    private FrameWorkers<H264PictureJob, H264SliceWork>? _workers;
+
+    /// <summary>The job for the picture being read, or <see langword="null"/> between pictures.</summary>
+    private H264PictureJob? _job;
+
+    /// <summary>When the picture being read is shown, in seconds.</summary>
+    private double _time;
 
     /// <summary>The header of the first slice of the picture being decoded.</summary>
     private H264SliceHeader? _firstHeader;
@@ -81,7 +99,10 @@ public sealed class H264Decoder : VideoDecoder
     /// <param name="height">The height in pixels.</param>
     /// <param name="lengthSize">The bytes of the length in front of each NAL unit.</param>
     private H264Decoder(int width, int height, int lengthSize)
-        : base(width, height) => _lengthSize = lengthSize;
+        : base(width, height)
+    {
+        _lengthSize = lengthSize;
+    }
 
     /// <summary>Makes a decoder for an H.264 track.</summary>
     /// <param name="track">The track, whose configuration is the AVC decoder configuration record.</param>
@@ -130,39 +151,51 @@ public sealed class H264Decoder : VideoDecoder
             throw new InvalidDataException("An H.264 packet is not valid.");
         }
 
-        _picture = null;
+        EnsureWorkers();
+        _job = null;
         _slices = 0;
+        _time = packet.Time;
         H264Sps? sps = null;
-        foreach (var nal in _nals)
+        try
         {
-            sps = HandleNal(data.Slice(nal.Offset, nal.Length)) ?? sps;
+            foreach (var nal in _nals)
+            {
+                sps = HandleNal(data.Slice(nal.Offset, nal.Length)) ?? sps;
+            }
+        }
+        catch
+        {
+            AbandonJob();
+            throw;
         }
 
-        if (_picture is not null && sps is not null && _firstHeader is not null)
+        if (_job is { } job && sps is not null && _firstHeader is not null)
         {
-            H264Deblocking.Apply(_picture);
-            var limit = sps.MaxNumReorderFrames >= 0 ? sps.MaxNumReorderFrames : sps.DpbFrames;
-            _queue.Add(new(_picture.Poc, MakeFrame(_picture, sps, packet.Time)), _firstHeader.IsIdr, limit, output);
-            _dpb.Mark(new(_picture, _firstHeader.Picture.FrameNum), _firstHeader, sps);
+            _job = null;
+            Dispatch(job, sps, _firstHeader);
         }
 
-        _picture = null;
+        _job = null;
         _firstHeader = null;
+        Drain(output, false);
     }
 
     /// <inheritdoc/>
     public override void Flush(List<VideoFrame> output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        _queue.Flush(output);
+        _queue.Flush(_ready);
+        Drain(output, true);
     }
 
     /// <inheritdoc/>
     public override void Reset()
     {
+        WaitForJobs();
         _queue.Clear();
+        _ready.Clear();
         _poc.Reset();
-        _picture = null;
+        AbandonJob();
         _firstHeader = null;
         _dpb.Clear();
     }
@@ -229,7 +262,13 @@ public sealed class H264Decoder : VideoDecoder
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        // Nothing here needs to be let go.
+        if (!disposing)
+        {
+            return;
+        }
+
+        WaitForJobs();
+        _workers?.Dispose();
     }
 
     /// <summary>Adds the parameter sets of a decoder configuration record.</summary>
@@ -331,6 +370,154 @@ public sealed class H264Decoder : VideoDecoder
         return _rbsp.AsSpan(0, length);
     }
 
+    /// <summary>Makes the number of worker threads match <see cref="VideoDecoder.MaxThreads"/>, waiting for the pictures under way when it changes.</summary>
+    private void EnsureWorkers()
+    {
+        var wanted = MaxThreads > 1 ? MaxThreads * ThreadsPerToken : 0;
+        if (wanted == (_workers?.Count ?? 0))
+        {
+            return;
+        }
+
+        WaitForJobs();
+        _workers?.Dispose();
+        _workers = wanted > 0 ? CreateWorkers() : null;
+    }
+
+    /// <summary>Starts the threads that decode pictures, and the tokens that let as many of them run as <see cref="VideoDecoder.MaxThreads"/> allows.</summary>
+    /// <returns>The threads.</returns>
+    private FrameWorkers<H264PictureJob, H264SliceWork> CreateWorkers()
+    {
+        var tokens = new WorkTokens(MaxThreads);
+        return new(MaxThreads * ThreadsPerToken, tokens, () => new(tokens), H264PictureRunner.Run, "HyperCodecs frame worker");
+    }
+
+    /// <summary>Waits for every picture under way, without reporting a failure: a picture that failed reports it when its frame is taken.</summary>
+    private void WaitForJobs()
+    {
+        while (_inFlight.Count > 0)
+        {
+            Retire(_inFlight.Dequeue());
+        }
+    }
+
+    /// <summary>Waits for a job that has left the queue of jobs under way, and keeps it for use again once its frame has been given out.</summary>
+    /// <param name="job">The job.</param>
+    private void Retire(H264PictureJob job)
+    {
+        job.WaitQuietly();
+        if (job.Unqueue())
+        {
+            _idleJobs.Push(job);
+        }
+    }
+
+    /// <summary>Gives up the picture being read, because reading it failed.</summary>
+    private void AbandonJob()
+    {
+        if (_job is not { } job)
+        {
+            return;
+        }
+
+        _job = null;
+        job.Picture.AbortDecoding();
+        job.Finish();
+        _idleJobs.Push(job);
+    }
+
+    /// <summary>Starts the job for the picture whose first slice has just been read.</summary>
+    /// <param name="header">The header of the first slice.</param>
+    /// <param name="sets">The parameter sets the slice uses.</param>
+    /// <returns>The job.</returns>
+    private H264PictureJob BeginJob(H264SliceHeader header, H264SliceSets sets)
+    {
+        _pictureCount++;
+        var picture = RentPicture(sets.Sps.WidthInMbs, sets.Sps.HeightInMbs);
+        picture.Uid = _pictureCount;
+        picture.ChromaQpOffsetCb = sets.Pps.ChromaQpOffset;
+        picture.ChromaQpOffsetCr = sets.Pps.SecondChromaQpOffset;
+        picture.Poc = _poc.Next(header, sets.Sps);
+        _firstHeader = header;
+        var job = _idleJobs.Count > 0 ? _idleJobs.Pop() : new();
+        job.Begin(picture, RentFrame(Width, Height, _time));
+        return job;
+    }
+
+    /// <summary>Runs a picture job on a worker thread, or here when the decoder uses one thread, and queues the picture's frame for output.</summary>
+    /// <param name="job">The job, with all the slices of the picture.</param>
+    /// <param name="sps">The sequence parameter set of the picture.</param>
+    /// <param name="first">The header of the picture's first slice.</param>
+    private void Dispatch(H264PictureJob job, H264Sps sps, H264SliceHeader first)
+    {
+        job.SetSps(sps);
+        var picture = job.Picture;
+        var frame = job.Frame;
+        if (_workers is { } workers)
+        {
+            while (_inFlight.Count > 0 && (_inFlight.Count >= workers.Count || _inFlight.Peek().IsDone))
+            {
+                Retire(_inFlight.Dequeue());
+            }
+
+            job.Queue(true);
+            frame.Pending = job;
+            _inFlight.Enqueue(job);
+            workers.Submit(job);
+        }
+        else
+        {
+            H264PictureRunner.Run(job, _work);
+            job.Wait();
+            _idleJobs.Push(job);
+        }
+
+        var limit = sps.MaxNumReorderFrames >= 0 ? sps.MaxNumReorderFrames : sps.DpbFrames;
+        _queue.Add(new(picture.Poc, frame), first.IsIdr, limit, _ready);
+        _dpb.Mark(new(picture, first.Picture.FrameNum), first, sps);
+    }
+
+    /// <summary>Moves the frames that are complete from the queue of released frames to the output, in order.</summary>
+    /// <param name="output">Receives the frames.</param>
+    /// <param name="force">Whether to wait for the frames that are not complete yet.</param>
+    private void Drain(List<VideoFrame> output, bool force)
+    {
+        var taken = 0;
+        try
+        {
+            while (taken < _ready.Count)
+            {
+                var frame = _ready[taken];
+                if (frame.Pending is H264PictureJob job)
+                {
+                    if (!force && !job.IsDone)
+                    {
+                        break;
+                    }
+
+                    frame.Pending = null;
+                    taken++;
+                    var keep = job.Settle();
+                    job.Wait();
+                    if (keep)
+                    {
+                        _idleJobs.Push(job);
+                    }
+                }
+                else
+                {
+                    taken++;
+                }
+
+                output.Add(frame);
+            }
+        }
+        finally
+        {
+            _ready.RemoveRange(0, taken);
+        }
+    }
+
     /// <summary>Finds a picture to decode into: one no later picture can refer to, made like new, or a new one when every kept picture is still a reference.</summary>
     /// <param name="columns">The width in macroblocks.</param>
     /// <param name="rows">The height in macroblocks.</param>
@@ -347,7 +534,7 @@ public sealed class H264Decoder : VideoDecoder
 
         foreach (var candidate in _pool)
         {
-            if (_dpb.Holds(candidate))
+            if (_dpb.Holds(candidate) || !candidate.IsIdle())
             {
                 continue;
             }
@@ -365,6 +552,7 @@ public sealed class H264Decoder : VideoDecoder
     /// <param name="nal">The NAL unit.</param>
     /// <returns>The sequence parameter set the slice uses.</returns>
     /// <exception cref="NotSupportedException">The slice is not an intra slice.</exception>
+    /// <exception cref="InvalidDataException">The picture has more slices than macroblocks.</exception>
     private H264Sps DecodeSlice(ReadOnlySpan<byte> nal)
     {
         if (_rbsp.Length < nal.Length)
@@ -375,19 +563,14 @@ public sealed class H264Decoder : VideoDecoder
         var length = NalUnits.Unescape(nal, _rbsp, 1);
         var rbsp = _rbsp.AsSpan(0, length);
         var header = H264SliceHeaderReader.Read(rbsp, nal[0], _sets, out var sps, out var pps, out var dataBit);
-        if (_picture is null)
+        var sets = new H264SliceSets(sps, pps);
+        var job = _job ??= BeginJob(header, sets);
+        if (_slices >= job.Picture.SliceFilters.Length)
         {
-            _pictureCount++;
-            _picture = RentPicture(sps.WidthInMbs, sps.HeightInMbs);
-            _picture.Uid = _pictureCount;
-            _picture.ChromaQpOffsetCb = pps.ChromaQpOffset;
-            _picture.ChromaQpOffsetCr = pps.SecondChromaQpOffset;
-            _picture.Poc = _poc.Next(header, sps);
-            _firstHeader = header;
+            throw new InvalidDataException("An H.264 picture has more slices than macroblocks.");
         }
 
-        _picture.SliceFilters.Add(new(header.Tail.DisableDeblockingFilterIdc, header.Tail.AlphaC0OffsetDiv2 << 1, header.Tail.BetaOffsetDiv2 << 1));
-
+        job.Picture.SliceFilters[_slices] = new(header.Tail.DisableDeblockingFilterIdc, header.Tail.AlphaC0OffsetDiv2 << 1, header.Tail.BetaOffsetDiv2 << 1);
         if (_scale is null || !ReferenceEquals(_scaleSource, pps.Scaling))
         {
             _scale = new(pps.Scaling);
@@ -395,77 +578,41 @@ public sealed class H264Decoder : VideoDecoder
         }
 
         _slices++;
-        var startQp = pps.PicInitQp + header.Tail.QpDelta;
-        if (header.IsP || header.IsB)
-        {
-            DecodeInterSlice(rbsp, dataBit, header, new(sps, pps));
-        }
-        else if (pps.Cabac)
-        {
-            new H264CabacIntraSliceDecoder(_picture, pps, _scale, _slices, startQp, _work).Decode(rbsp, dataBit, header.FirstMb);
-        }
-        else
-        {
-            new H264IntraSliceDecoder(_picture, pps, _scale, _slices, startQp, _work.Mb).Decode(rbsp, dataBit, header.FirstMb);
-        }
-
+        var slice = job.NextSlice();
+        slice.Fill(rbsp, header, sets, _scale, dataBit, _slices);
+        CopyLists(job, slice);
         return sps;
     }
 
-    /// <summary>Decodes a P or B slice into the current picture.</summary>
-    /// <param name="rbsp">The payload of the slice's NAL unit.</param>
-    /// <param name="dataBit">The bit index where the slice data starts.</param>
-    /// <param name="header">The slice header.</param>
-    /// <param name="sets">The parameter sets the slice uses.</param>
-    /// <exception cref="NotSupportedException">The slice uses a feature this decoder does not read.</exception>
-    private void DecodeInterSlice(ReadOnlySpan<byte> rbsp, long dataBit, H264SliceHeader header, H264SliceSets sets)
+    /// <summary>Builds the reference lists of an inter slice and gives the slice its own copy of them, and holds the pictures they name in use for the job.</summary>
+    /// <param name="job">The job of the slice's picture.</param>
+    /// <param name="slice">The slice.</param>
+    /// <exception cref="InvalidDataException">The slice refers to frames that are not there.</exception>
+    private void CopyLists(H264PictureJob job, H264SliceJob slice)
     {
-        var picture = _picture!;
+        var header = slice.Header;
         if (header.IsB)
         {
-            var lists = _dpb.BuildListsB(header, sets.Sps, picture.Poc);
-            if (sets.Pps.Cabac)
-            {
-                new H264CabacBSliceDecoder(picture, sets, _scale!, _slices, header, lists, _work).Decode(rbsp, dataBit, header.FirstMb);
-                return;
-            }
-
-            new H264BSliceDecoder(picture, sets, _scale!, _slices, header, lists, _work).Decode(rbsp, dataBit, header.FirstMb);
+            var lists = _dpb.BuildListsB(header, slice.Sets.Sps, job.Picture.Poc);
+            slice.CopyLists(lists.L0, lists.L1);
+        }
+        else if (header.IsP)
+        {
+            slice.CopyLists(_dpb.BuildList0(header, slice.Sets.Sps), null);
+        }
+        else
+        {
             return;
         }
 
-        var list = _dpb.BuildList0(header, sets.Sps);
-        if (sets.Pps.Cabac)
+        foreach (var entry in slice.List0)
         {
-            new H264CabacPSliceDecoder(picture, sets.Pps, _scale!, _slices, header, list, _work).Decode(rbsp, dataBit, header.FirstMb);
-            return;
+            job.Use(entry.Picture);
         }
 
-        new H264PSliceDecoder(picture, sets.Pps, _scale!, _slices, header, list, _work).Decode(rbsp, dataBit, header.FirstMb);
-    }
-
-    /// <summary>Copies the visible part of a decoded picture into a frame.</summary>
-    /// <param name="picture">The picture.</param>
-    /// <param name="sps">The sequence parameter set, which gives the cropping.</param>
-    /// <param name="time">When the picture is shown, in seconds.</param>
-    /// <returns>The frame.</returns>
-    private VideoFrame MakeFrame(H264Picture picture, H264Sps sps, double time)
-    {
-        var frame = RentFrame(Width, Height, time);
-        var left = CropUnit * sps.Crop.Left;
-        var top = CropUnit * sps.Crop.Top;
-        for (var row = 0; row < Height; row++)
+        foreach (var entry in slice.List1)
         {
-            Array.Copy(picture.Luma, ((top + row) * picture.LumaStride) + left, frame.Y, row * Width, Width);
+            job.Use(entry.Picture);
         }
-
-        for (var row = 0; row < frame.ChromaHeight; row++)
-        {
-            var source = (((top >> 1) + row) * picture.ChromaStride) + (left >> 1);
-            Array.Copy(picture.Cb, source, frame.U, row * frame.ChromaWidth, frame.ChromaWidth);
-            Array.Copy(picture.Cr, source, frame.V, row * frame.ChromaWidth, frame.ChromaWidth);
-        }
-
-        return frame;
     }
 }

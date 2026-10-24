@@ -49,4 +49,7 @@ public sealed class VideoFrame
 
     /// <summary>Gets the Cr plane, row after row with no padding.</summary>
     public byte[] V { get; }
+
+    /// <summary>Gets or sets what a decoder is still doing to fill the frame, or <see langword="null"/> when the frame is complete.</summary>
+    internal object? Pending { get; set; }
 }

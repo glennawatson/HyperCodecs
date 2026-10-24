@@ -122,6 +122,7 @@ internal sealed class H264BSliceDecoder
             {
                 CheckAddress(address, total);
                 SkipMacroblock(address);
+                H264Deblocking.MacroblockDecoded(_picture, address);
                 address++;
             }
 
@@ -132,6 +133,7 @@ internal sealed class H264BSliceDecoder
 
             CheckAddress(address, total);
             DecodeMacroblock(ref reader, address);
+            H264Deblocking.MacroblockDecoded(_picture, address);
             address++;
             if (!ExpGolomb.MoreData(reader.BitPosition, stop) || reader.IsOverrun)
             {

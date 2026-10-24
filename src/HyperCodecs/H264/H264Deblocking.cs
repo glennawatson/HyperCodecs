@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace HyperCodecs.H264;
 
@@ -72,28 +73,90 @@ internal static class H264Deblocking
     /// <summary>The distance in samples across an edge between the first and fourth sample.</summary>
     private const int Reach = 3;
 
-    /// <summary>Filters a frame in place.</summary>
-    /// <param name="picture">The decoded frame, whose per-macroblock records say how to filter it.</param>
-    internal static void Apply(H264Picture picture)
+    /// <summary>
+    /// Records that a macroblock has been decoded and filters the rows that can be filtered. A row is filtered once the row below it is decoded: intra
+    /// prediction reads the samples of the row above before they are filtered, and the last reader of a row's samples is the row below it. Filtering a row
+    /// changes the samples of that row and the three bottom lines of the one above, so it never reaches a row the decoder is still reading.
+    /// </summary>
+    /// <param name="picture">The frame being decoded.</param>
+    /// <param name="address">The macroblock that has been decoded.</param>
+    internal static void MacroblockDecoded(H264Picture picture, int address)
+    {
+        if (picture.MacroblockDecoded(address))
+        {
+            FilterReady(picture);
+        }
+    }
+
+    /// <summary>Filters the rows not yet filtered, whether or not every macroblock of them was decoded, and marks the picture finished.</summary>
+    /// <param name="picture">The frame, all of whose slices have been decoded.</param>
+    internal static void Finish(H264Picture picture)
+    {
+        Span<int> strength = stackalloc int[Directions * PerDirection];
+        while (picture.FilteredRows < picture.MbHeight)
+        {
+            FilterRow(picture, picture.FilteredRows, strength);
+            picture.RowFiltered();
+        }
+
+        picture.FinishDecoding();
+    }
+
+    /// <summary>Filters the rows that have been decoded far enough.</summary>
+    /// <param name="picture">The frame being decoded.</param>
+    private static void FilterReady(H264Picture picture)
+    {
+        Span<int> strength = stackalloc int[Directions * PerDirection];
+        while (picture.FilteredRows < picture.MbHeight && picture.CanFilter(picture.FilteredRows))
+        {
+            FilterRow(picture, picture.FilteredRows, strength);
+            picture.RowFiltered();
+        }
+    }
+
+    /// <summary>Filters the macroblocks of one row of a frame from left to right.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="row">The row.</param>
+    /// <param name="strength">Work space for the boundary strengths.</param>
+    private static void FilterRow(H264Picture picture, int row, Span<int> strength)
     {
         var width = picture.MbWidth;
-        Span<int> strength = stackalloc int[Directions * PerDirection];
-        for (var address = 0; address < width * picture.MbHeight; address++)
+        for (var column = 0; column < width; column++)
         {
-            var slice = picture.SliceOfMb[address];
-            var filter = picture.SliceFilters[slice - 1];
-            if (filter.Mode == FilterNothing)
-            {
-                continue;
-            }
-
-            var left = address % width > 0 && (filter.Mode != FilterInsideSlices || picture.SliceOfMb[address - 1] == slice);
-            var top = address >= width && (filter.Mode != FilterInsideSlices || picture.SliceOfMb[address - width] == slice);
-            ComputeStrengths(picture, address, new(left, top), strength);
-            FilterPlane(picture, picture.Luma, new(picture.LumaStride, H264Picture.LumaSize, LumaSegment, 1, false, 0), address, filter, strength);
-            FilterPlane(picture, picture.Cb, new(picture.ChromaStride, H264Picture.ChromaSize, ChromaSegment, Half, true, picture.ChromaQpOffsetCb), address, filter, strength);
-            FilterPlane(picture, picture.Cr, new(picture.ChromaStride, H264Picture.ChromaSize, ChromaSegment, Half, true, picture.ChromaQpOffsetCr), address, filter, strength);
+            FilterMacroblock(picture, (row * width) + column, strength);
         }
+    }
+
+    /// <summary>Filters the edges of one macroblock.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="address">The macroblock.</param>
+    /// <param name="strength">Work space for the boundary strengths.</param>
+    private static void FilterMacroblock(H264Picture picture, int address, Span<int> strength)
+    {
+        var width = picture.MbWidth;
+        var slice = picture.SliceOfMb[address];
+        if (slice < 1)
+        {
+            return;
+        }
+
+        var filter = picture.SliceFilters[slice - 1];
+        if (filter.Mode == FilterNothing)
+        {
+            return;
+        }
+
+        var left = address % width > 0 && (filter.Mode != FilterInsideSlices || picture.SliceOfMb[address - 1] == slice);
+        var top = address >= width && (filter.Mode != FilterInsideSlices || picture.SliceOfMb[address - width] == slice);
+        ComputeStrengths(picture, address, new(left, top), strength);
+        if (strength.IndexOfAnyExcept(0) < 0)
+        {
+            return;
+        }
+
+        FilterPlane(picture, picture.Luma, new(picture.LumaStride, H264Picture.LumaSize, LumaSegment, 1, false, 0), address, filter, strength);
+        FilterPlane(picture, picture.Cb, new(picture.ChromaStride, H264Picture.ChromaSize, ChromaSegment, Half, true, picture.ChromaQpOffsetCb), address, filter, strength);
+        FilterPlane(picture, picture.Cr, new(picture.ChromaStride, H264Picture.ChromaSize, ChromaSegment, Half, true, picture.ChromaQpOffsetCr), address, filter, strength);
     }
 
     /// <summary>Works out the boundary strength of every edge segment of a macroblock.</summary>
@@ -124,8 +187,28 @@ internal static class H264Deblocking
         var self = new H264EdgeBlocks(address, CodedMask(picture, address), H264MotionCompare.IsUniform(picture, address));
         H264EdgeBlocks? left = filtered.Left ? NeighbourBlocks(picture, address - 1) : null;
         H264EdgeBlocks? top = filtered.Top ? NeighbourBlocks(picture, address - picture.MbWidth) : null;
-        var transform8x8 = picture.Transform8x8[address];
-        for (var edge = 0; edge < Side; edge++)
+        if (self.Uniform && self.Coded == 0)
+        {
+            // Nothing inside the macroblock separates different motion or has coefficients, so only the edges with the neighbours can be filtered.
+            strength.Clear();
+            FillEdges(picture, self, left, top, 1, strength);
+            return;
+        }
+
+        FillEdges(picture, self, left, top, Side, strength);
+    }
+
+    /// <summary>Works out the strengths of the first edges of an inter macroblock in each direction.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="self">The macroblock.</param>
+    /// <param name="left">The macroblock on the left, or <see langword="null"/> when its edge is not filtered.</param>
+    /// <param name="top">The macroblock above, or <see langword="null"/> when its edge is not filtered.</param>
+    /// <param name="edges">How many edges to work out, counting from the left and from the top.</param>
+    /// <param name="strength">Receives the strengths.</param>
+    private static void FillEdges(H264Picture picture, H264EdgeBlocks self, H264EdgeBlocks? left, H264EdgeBlocks? top, int edges, Span<int> strength)
+    {
+        var transform8x8 = picture.Transform8x8[self.Address];
+        for (var edge = 0; edge < edges; edge++)
         {
             var skipInner = (edge & 1) == 1 && transform8x8;
             for (var segment = 0; segment < Side; segment++)
@@ -318,10 +401,17 @@ internal static class H264Deblocking
             }
 
             var limits = Limits(filter, AverageQp(picture, where.Address, neighbour, layout));
+            var strengths = strength.Slice((where.Direction * PerDirection) + (edge * Side), Side);
+            var first = where.Origin + (((edge / layout.EdgeStep) * LumaSegment) * across);
+            if (!vertical && H264DeblockHorizontal.Handles(strengths))
+            {
+                H264DeblockHorizontal.Filter(plane, first, across, strengths, limits, layout.Chroma);
+                continue;
+            }
+
             for (var segment = 0; segment < Side; segment++)
             {
-                var start = where.Origin + (((edge / layout.EdgeStep) * LumaSegment) * across) + (segment * layout.SegmentLength * along);
-                FilterSegment(plane, start, new(across, along, layout.SegmentLength), strength[(where.Direction * PerDirection) + (edge * Side) + segment], limits, layout.Chroma);
+                FilterSegment(plane, first + (segment * layout.SegmentLength * along), new(across, along, layout.SegmentLength), strengths[segment], limits, layout.Chroma);
             }
         }
     }
@@ -375,6 +465,23 @@ internal static class H264Deblocking
         return new(H264DeblockTables.Alpha[indexA], H264DeblockTables.Beta[indexB], indexA);
     }
 
+    /// <summary>
+    /// Checks that every sample a segment's filters touch is inside the plane. The filters read and write without bounds checks, so this one check stands
+    /// in for them: the farthest samples are four away from the edge on its near side and three on its far side.
+    /// </summary>
+    /// <param name="length">The samples in the plane.</param>
+    /// <param name="start">The index of the first sample on the far side of the edge (q0).</param>
+    /// <param name="line">How the samples are laid out around the edge.</param>
+    /// <exception cref="InvalidDataException">The edge reaches outside the plane.</exception>
+    private static void CheckInside(int length, int start, H264EdgeLine line)
+    {
+        var last = start + ((line.Length - 1) * line.Along);
+        if (start < (Reach + 1) * line.Across || last < 0 || Math.Max(start, last) + (Reach * line.Across) >= length)
+        {
+            throw new InvalidDataException("An H.264 edge lies outside its picture.");
+        }
+    }
+
     /// <summary>Filters the samples along one segment of an edge.</summary>
     /// <param name="plane">The plane.</param>
     /// <param name="start">The index of the first sample on the far side of the edge (q0).</param>
@@ -389,6 +496,7 @@ internal static class H264Deblocking
             return;
         }
 
+        CheckInside(plane.Length, start, line);
         for (var i = 0; i < line.Length; i++)
         {
             var q0 = start + (i * line.Along);
@@ -412,10 +520,12 @@ internal static class H264Deblocking
     /// <param name="chroma">Whether the samples are chroma.</param>
     private static void FilterNormal(byte[] plane, int q0, int across, int strength, H264EdgeLimits limits, bool chroma)
     {
-        int p0 = plane[q0 - across];
-        int p1 = plane[q0 - (Half * across)];
-        int q0Value = plane[q0];
-        int q1 = plane[q0 + across];
+        // FilterSegment has checked that every sample this reads is inside the plane.
+        ref var origin = ref MemoryMarshal.GetArrayDataReference(plane);
+        int p0 = Unsafe.Add(ref origin, q0 - across);
+        int p1 = Unsafe.Add(ref origin, q0 - (Half * across));
+        int q0Value = Unsafe.Add(ref origin, q0);
+        int q1 = Unsafe.Add(ref origin, q0 + across);
         if (Math.Abs(p0 - q0Value) >= limits.Alpha || Math.Abs(p1 - p0) >= limits.Beta || Math.Abs(q1 - q0Value) >= limits.Beta)
         {
             return;
@@ -429,24 +539,24 @@ internal static class H264Deblocking
         var smoothQ = false;
         if (!chroma)
         {
-            p2 = plane[q0 - (Reach * across)];
-            q2 = plane[q0 + (Half * across)];
+            p2 = Unsafe.Add(ref origin, q0 - (Reach * across));
+            q2 = Unsafe.Add(ref origin, q0 + (Half * across));
             smoothP = Math.Abs(p2 - p0) < limits.Beta;
             smoothQ = Math.Abs(q2 - q0Value) < limits.Beta;
             tc = tc0 + (smoothP ? 1 : 0) + (smoothQ ? 1 : 0);
         }
 
         var delta = Math.Clamp((((q0Value - p0) << DifferenceShift) + (p1 - q1) + DeltaRound) >> DeltaShift, -tc, tc);
-        plane[q0 - across] = (byte)Math.Clamp(p0 + delta, 0, MaxSample);
-        plane[q0] = (byte)Math.Clamp(q0Value - delta, 0, MaxSample);
+        Unsafe.Add(ref origin, q0 - across) = (byte)Math.Clamp(p0 + delta, 0, MaxSample);
+        Unsafe.Add(ref origin, q0) = (byte)Math.Clamp(q0Value - delta, 0, MaxSample);
         if (smoothP)
         {
-            plane[q0 - (Half * across)] = (byte)(p1 + Math.Clamp((p2 + ((p0 + q0Value + 1) >> 1) - (p1 << 1)) >> 1, -tc0, tc0));
+            Unsafe.Add(ref origin, q0 - (Half * across)) = (byte)(p1 + Math.Clamp((p2 + ((p0 + q0Value + 1) >> 1) - (p1 << 1)) >> 1, -tc0, tc0));
         }
 
         if (smoothQ)
         {
-            plane[q0 + across] = (byte)(q1 + Math.Clamp((q2 + ((p0 + q0Value + 1) >> 1) - (q1 << 1)) >> 1, -tc0, tc0));
+            Unsafe.Add(ref origin, q0 + across) = (byte)(q1 + Math.Clamp((q2 + ((p0 + q0Value + 1) >> 1) - (q1 << 1)) >> 1, -tc0, tc0));
         }
     }
 

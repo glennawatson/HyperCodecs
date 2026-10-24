@@ -35,36 +35,108 @@ internal static class H265Interpolation
     internal static void Run(in H265InterpolationJob job, H265PredictionBuffers buffers, Span<short> destination)
     {
         var taps = job.Chroma ? H265InterpolationFilters.ChromaTaps : H265InterpolationFilters.LumaTaps;
-        var before = (taps >> 1) - 1;
-        var width = job.Source.Width;
-        var height = job.Source.Height;
-        var stride = width + taps - 1;
-        var wholeShift = Math.Max(MinWholeShift, IntermediateBits - job.BitDepth);
-        var shift1 = Math.Min(MaxFirstShift, job.BitDepth - EightBits);
-        Fetch(job, buffers.Reference, before, taps);
-        var reference = buffers.Reference.AsSpan();
+        var eightBit = job.BitDepth == EightBits && Vector128.IsHardwareAccelerated;
+        var window = Window(job, buffers, taps, eightBit ? H265InterpolationEightBit.Padded(job.Source.Width) : job.Source.Width);
         if (job.FracX == 0 && job.FracY == 0)
         {
-            CopyWhole(reference, stride, before, destination, width, height, wholeShift);
+            var wholeShift = Math.Max(MinWholeShift, IntermediateBits - job.BitDepth);
+            CopyWhole(window.Samples, window.Stride, (taps >> 1) - 1, destination, job.Source.Width, job.Source.Height, wholeShift);
             return;
         }
 
+        if (eightBit)
+        {
+            RunEightBit(job, buffers, window, destination);
+            return;
+        }
+
+        RunGeneral(job, buffers, window, destination);
+    }
+
+    /// <summary>Interpolates a block of video of more than 8 bits with a fraction in at least one direction, in 32 bit lanes.</summary>
+    /// <param name="job">The block.</param>
+    /// <param name="buffers">The work areas.</param>
+    /// <param name="window">The reference samples of the block and its margins.</param>
+    /// <param name="destination">Receives the block, row after row.</param>
+    private static void RunGeneral(in H265InterpolationJob job, H265PredictionBuffers buffers, in H265ReferenceWindow window, Span<short> destination)
+    {
+        var taps = job.Chroma ? H265InterpolationFilters.ChromaTaps : H265InterpolationFilters.LumaTaps;
+        var before = (taps >> 1) - 1;
+        var width = job.Source.Width;
+        var height = job.Source.Height;
+        var shift1 = Math.Min(MaxFirstShift, job.BitDepth - EightBits);
+        var reference = window.Samples;
         var horizontal = job.FracX == 0 ? default : Filter(job, job.FracX);
         var vertical = job.FracY == 0 ? default : Filter(job, job.FracY);
         if (job.FracY == 0)
         {
-            FilterRows(reference, new(stride, width, height), before, horizontal, destination, shift1);
+            FilterRows(reference, new(window.Stride, width, height), before, horizontal, destination, shift1);
         }
         else if (job.FracX == 0)
         {
-            FilterColumns(reference[before..], stride, vertical, destination, width, height, shift1);
+            FilterColumns(reference[before..], window.Stride, vertical, destination, width, height, shift1);
         }
         else
         {
             var middle = buffers.Horizontal.AsSpan();
-            FilterRows(reference, new(stride, width, height + taps - 1), 0, horizontal, middle, shift1);
+            FilterRows(reference, new(window.Stride, width, height + taps - 1), 0, horizontal, middle, shift1);
             FilterColumns(middle, width, vertical, destination, width, height, SecondShift);
         }
+    }
+
+    /// <summary>Interpolates a block of 8 bit video with a fraction in at least one direction, in 16 bit lanes.</summary>
+    /// <param name="job">The block.</param>
+    /// <param name="buffers">The work areas.</param>
+    /// <param name="window">The reference samples of the block and its margins.</param>
+    /// <param name="destination">Receives the block, row after row.</param>
+    private static void RunEightBit(in H265InterpolationJob job, H265PredictionBuffers buffers, in H265ReferenceWindow window, Span<short> destination)
+    {
+        var taps = job.Chroma ? H265InterpolationFilters.ChromaTaps : H265InterpolationFilters.LumaTaps;
+        var before = (taps >> 1) - 1;
+        var size = new BlockRect(0, 0, job.Source.Width, job.Source.Height);
+        Span<Vector128<short>> horizontalStore = stackalloc Vector128<short>[H265InterpolationFilters.LumaTaps];
+        Span<Vector128<short>> verticalStore = stackalloc Vector128<short>[H265InterpolationFilters.LumaTaps];
+        var horizontal = horizontalStore[..taps];
+        var vertical = verticalStore[..taps];
+        var samples = window.Samples;
+        if (job.FracY == 0)
+        {
+            H265InterpolationEightBit.Broadcast(Filter(job, job.FracX), horizontal);
+            H265InterpolationEightBit.FilterRows(samples, new(window.Stride, size.Width, size.Height), before, horizontal, destination);
+        }
+        else if (job.FracX == 0)
+        {
+            H265InterpolationEightBit.Broadcast(Filter(job, job.FracY), vertical);
+            H265InterpolationEightBit.FilterColumns(samples[before..], window.Stride, vertical, destination, size);
+        }
+        else
+        {
+            H265InterpolationEightBit.Broadcast(Filter(job, job.FracX), horizontal);
+            H265InterpolationEightBit.Broadcast(Filter(job, job.FracY), vertical);
+            var middle = buffers.Horizontal.AsSpan();
+            H265InterpolationEightBit.FilterRows(samples, new(window.Stride, size.Width, size.Height + taps - 1), 0, horizontal, middle);
+            H265InterpolationEightBit.FilterIntermediate(middle, size.Width, vertical, destination, size, SecondShift);
+        }
+    }
+
+    /// <summary>Finds the reference samples of a block and its margins: in the plane itself when they all lie inside it, otherwise in a copy made with the edge samples repeated.</summary>
+    /// <param name="job">The block.</param>
+    /// <param name="buffers">The work areas.</param>
+    /// <param name="taps">The taps of the filter.</param>
+    /// <param name="readWidth">The width the filters read in each row of the block, which is more than the block is wide when they read whole vectors.</param>
+    /// <returns>The samples, starting at the first sample of the margin above and left of the block, and their row length.</returns>
+    private static H265ReferenceWindow Window(in H265InterpolationJob job, H265PredictionBuffers buffers, int taps, int readWidth)
+    {
+        var before = (taps >> 1) - 1;
+        var left = job.Source.X - before;
+        var top = job.Source.Y - before;
+        if (left >= 0 && top >= 0 && left + readWidth + taps - 1 <= job.PlaneWidth && top + job.Source.Height + taps - 1 <= job.PlaneHeight)
+        {
+            return new(job.Plane.AsMemory((top * job.PlaneWidth) + left), job.PlaneWidth);
+        }
+
+        Fetch(job, buffers.Reference, before, taps);
+        return new(buffers.Reference.AsMemory(), job.Source.Width + taps - 1);
     }
 
     /// <summary>Gets the taps for a fraction.</summary>

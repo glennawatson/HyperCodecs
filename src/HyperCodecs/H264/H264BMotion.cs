@@ -334,6 +334,7 @@ internal sealed class H264BMotion
     private H264ColBlock Colocated(int column, int row)
     {
         var col = _lists.L1[0].Picture;
+        col.WaitForDecodedRow(_mb.Y, _predictor.Tokens);
         var address = _mb.Address;
         var group = (address * H264Picture.GroupsPerMb) + ((row >> 1) * Half) + (column >> 1);
         var block = (address * H264Picture.BlocksPerMb) + (row * Side) + column;

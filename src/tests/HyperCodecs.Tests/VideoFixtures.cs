@@ -32,11 +32,20 @@ internal static class VideoFixtures
     /// <returns>A task representing the asynchronous check.</returns>
     /// <exception cref="InvalidDataException">The file did not open.</exception>
     /// <exception cref="NotSupportedException">No decoder handles the track.</exception>
-    internal static async Task AssertRecycledPicturesMatchAsync(string name)
+    internal static Task AssertRecycledPicturesMatchAsync(string name) => AssertRecycledPicturesMatchAsync(name, 1);
+
+    /// <summary>Decodes a fixture with a number of threads, handing every picture back as soon as it is hashed, and checks the hashes against the hash list of the same name.</summary>
+    /// <param name="name">The name of the fixture and of its hash list, without the extension.</param>
+    /// <param name="threads">The most threads the decoder may use.</param>
+    /// <returns>A task representing the asynchronous check.</returns>
+    /// <exception cref="InvalidDataException">The file did not open.</exception>
+    /// <exception cref="NotSupportedException">No decoder handles the track.</exception>
+    internal static async Task AssertRecycledPicturesMatchAsync(string name, int threads)
     {
         using var container = MediaContainers.Open(Path.Combine(AppContext.BaseDirectory, FixtureFolder, $"{name}.mp4")) ?? throw new InvalidDataException($"{name} did not open.");
         var index = container.FindTrack(MediaTrackKind.Video);
         using var decoder = VideoDecoders.Create(container.Tracks[index]) ?? throw new NotSupportedException($"No decoder for {name}.");
+        decoder.MaxThreads = threads;
         var hashes = new List<string>();
         var frames = new List<VideoFrame>();
         var packet = new MediaPacket();

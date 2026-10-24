@@ -77,6 +77,7 @@ internal sealed class H264IntraSliceDecoder
             }
 
             DecodeMacroblock(ref reader, address, (int)ExpGolomb.ReadUe(ref reader));
+            H264Deblocking.MacroblockDecoded(_picture, address);
             address++;
         }
         while (ExpGolomb.MoreData(reader.BitPosition, stop) && !reader.IsOverrun);

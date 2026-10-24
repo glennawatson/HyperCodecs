@@ -37,6 +37,9 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>The bytes of the length of a NAL unit in an array.</summary>
     private const int UnitLengthBytes = 2;
 
+    /// <summary>The threads kept for each thread the caller allows to run: pictures that wait for the pictures they refer to sleep, and the others take their place.</summary>
+    private const int ThreadsPerToken = 2;
+
     /// <summary>The parameter sets received so far.</summary>
     private readonly H265ParameterSets _sets = new();
 
@@ -79,14 +82,26 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>Makes a stand-in for a missing reference of the picture being started; made once so deriving the reference picture set allocates no delegate.</summary>
     private readonly Func<int, H265Picture> _makeMissing;
 
+    /// <summary>The picture jobs that are done and free to be used again.</summary>
+    private readonly Stack<H265PictureJob> _idleJobs = new();
+
+    /// <summary>The jobs given to the worker threads and not yet waited for, oldest first.</summary>
+    private readonly Queue<H265PictureJob> _inFlight = new();
+
+    /// <summary>The frames that have left the decoded picture buffer, in output order, and wait for the pictures that fill them.</summary>
+    private readonly List<VideoFrame> _ready = [];
+
     /// <summary>The payload of the NAL unit being decoded.</summary>
     private byte[] _rbsp = new byte[1_024];
 
     /// <summary>The slice context of the picture being decoded, or <see langword="null"/> between pictures.</summary>
     private H265SliceContext? _context;
 
-    /// <summary>The copy of a plane that sample adaptive offset reads, kept from picture to picture.</summary>
-    private ushort[] _saoSource = [];
+    /// <summary>The threads that decode pictures, or <see langword="null"/> when pictures are decoded on the thread that reads their packets.</summary>
+    private FrameWorkers<H265PictureJob, H265SliceContext>? _workers;
+
+    /// <summary>The job for the picture being read, or <see langword="null"/> between pictures and when the hardware decodes.</summary>
+    private H265PictureJob? _job;
 
     /// <summary>The sequence parameter set of the picture being started, for <see cref="_makeMissing"/>.</summary>
     private H265Sps? _startSps;
@@ -147,26 +162,32 @@ public sealed class H265Decoder : VideoDecoder
             throw new InvalidDataException("An H.265 packet is not valid.");
         }
 
+        EnsureWorkers();
         _time = packet.Time;
         foreach (var nal in _nals)
         {
-            HandleNal(data.Slice(nal.Offset, nal.Length), output);
+            HandleNal(data.Slice(nal.Offset, nal.Length), _ready);
         }
 
-        FinishPicture(output);
+        FinishPicture(_ready);
+        Drain(output, false);
     }
 
     /// <inheritdoc/>
     public override void Flush(List<VideoFrame> output)
     {
         ArgumentNullException.ThrowIfNull(output);
-        FinishPicture(output);
-        BumpAll(output);
+        FinishPicture(_ready);
+        BumpAll(_ready);
+        Drain(output, true);
     }
 
     /// <inheritdoc/>
     public override void Reset()
     {
+        WaitForJobs();
+        AbandonJob();
+        _ready.Clear();
         _context = null;
         _lastIndependent = null;
         _hardwareSlices.Clear();
@@ -241,6 +262,13 @@ public sealed class H265Decoder : VideoDecoder
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
+        if (!disposing)
+        {
+            return;
+        }
+
+        WaitForJobs();
+        _workers?.Dispose();
     }
 
     /// <summary>Makes a decoder for an H.265 track.</summary>
@@ -418,13 +446,31 @@ public sealed class H265Decoder : VideoDecoder
         _context.Header = header;
         H265RefListBuilder.Build(_context, _refSet);
         _context.SliceIndex = _context.Picture.SliceRefCount - 1;
-        if (_hardware is null)
+        if (_job is { } job)
         {
-            H265SliceDecoder.Decode(rbsp, _context);
+            AddSegment(job, rbsp, header);
             return;
         }
 
         KeepForHardware(nal, header, _context);
+    }
+
+    /// <summary>Gives a job the slice segment just read, with its own copy of the reference lists built for it.</summary>
+    /// <param name="job">The job of the picture.</param>
+    /// <param name="rbsp">The payload of the segment's NAL unit.</param>
+    /// <param name="header">The segment header.</param>
+    private void AddSegment(H265PictureJob job, ReadOnlySpan<byte> rbsp, H265SliceHeader header)
+    {
+        job.NextSlice().Fill(rbsp, header, _context!);
+        foreach (var picture in _context!.RefList0)
+        {
+            job.Use(picture);
+        }
+
+        foreach (var picture in _context.RefList1)
+        {
+            job.Use(picture);
+        }
     }
 
     /// <summary>Keeps a slice segment, with the reference lists built for it, until the picture is complete and goes to the hardware.</summary>
@@ -446,7 +492,7 @@ public sealed class H265Decoder : VideoDecoder
         var shown = H265FrameConverter.ShownSize(context.Sps);
         var frame = RentFrame(shown.Width, shown.Height, picture.Time);
         _hardware!.Decode(new(picture, context.Sps, context.Pps, _refSet, _dpb.Pictures, _hardwareSlices, _hardwareBytes.WrittenMemory), frame);
-        picture.HardwareFrame = frame;
+        picture.OutputFrame = frame;
         _hardwareSlices.Clear();
         _hardwareBytes.ResetWrittenCount();
     }
@@ -524,24 +570,143 @@ public sealed class H265Decoder : VideoDecoder
         picture.Time = _time;
         picture.Sps = sps;
         picture.NeededForOutput = header.PicOutput;
-        _context = MakeContext(sps, pps, layout, picture);
-    }
-
-    /// <summary>Makes the context for decoding a picture, giving it the work areas the decoder keeps.</summary>
-    /// <param name="sps">The sequence parameter set.</param>
-    /// <param name="pps">The picture parameter set.</param>
-    /// <param name="layout">The layout of the picture.</param>
-    /// <param name="picture">The picture.</param>
-    /// <returns>The context.</returns>
-    private H265SliceContext MakeContext(H265Sps sps, H265Pps pps, H265PictureLayout layout, H265Picture picture)
-    {
-        if (_saoSource.Length < picture.Luma.Length)
+        _contextStore.Begin(sps, pps, layout, picture);
+        _context = _contextStore;
+        if (_hardware is not null)
         {
-            _saoSource = new ushort[picture.Luma.Length];
+            return;
         }
 
-        _contextStore.Begin(sps, pps, layout, picture, _saoSource);
-        return _contextStore;
+        var shown = H265FrameConverter.ShownSize(sps);
+        var frame = picture.NeededForOutput ? RentFrame(shown.Width, shown.Height, picture.Time) : null;
+        var job = _idleJobs.Count > 0 ? _idleJobs.Pop() : new();
+        job.Begin(picture, new(sps, pps, layout), frame);
+        _job = job;
+    }
+
+    /// <summary>Makes the number of worker threads match <see cref="VideoDecoder.MaxThreads"/>, waiting for the pictures under way when it changes.</summary>
+    private void EnsureWorkers()
+    {
+        var wanted = _hardware is null && MaxThreads > 1 ? MaxThreads * ThreadsPerToken : 0;
+        if (wanted == (_workers?.Count ?? 0))
+        {
+            return;
+        }
+
+        WaitForJobs();
+        _workers?.Dispose();
+        _workers = wanted > 0 ? CreateWorkers() : null;
+    }
+
+    /// <summary>Starts the threads that decode pictures, and the tokens that let as many of them run as <see cref="VideoDecoder.MaxThreads"/> allows.</summary>
+    /// <returns>The threads.</returns>
+    private FrameWorkers<H265PictureJob, H265SliceContext> CreateWorkers()
+    {
+        var tokens = new WorkTokens(MaxThreads);
+        return new(MaxThreads * ThreadsPerToken, tokens, () => new(new(), tokens), H265PictureRunner.Run, "HyperCodecs frame worker");
+    }
+
+    /// <summary>Waits for every picture under way, without reporting a failure: a picture that failed reports it when its frame is taken.</summary>
+    private void WaitForJobs()
+    {
+        while (_inFlight.Count > 0)
+        {
+            Retire(_inFlight.Dequeue());
+        }
+    }
+
+    /// <summary>Waits for a job that has left the queue of jobs under way, and keeps it for use again once its frame has been given out.</summary>
+    /// <param name="job">The job.</param>
+    private void Retire(H265PictureJob job)
+    {
+        job.WaitQuietly();
+        if (job.Unqueue())
+        {
+            _idleJobs.Push(job);
+        }
+    }
+
+    /// <summary>Gives up the picture being read, because reading it failed.</summary>
+    private void AbandonJob()
+    {
+        if (_job is not { } job)
+        {
+            return;
+        }
+
+        _job = null;
+        job.Picture.AbortDecoding();
+        job.Finish();
+        _idleJobs.Push(job);
+    }
+
+    /// <summary>Runs the job of the picture just read on a worker thread, or here when the decoder uses one thread.</summary>
+    /// <param name="job">The job, with all the slice segments of the picture.</param>
+    private void Dispatch(H265PictureJob job)
+    {
+        var frame = job.Frame;
+        if (_workers is { } workers)
+        {
+            while (_inFlight.Count > 0 && (_inFlight.Count >= workers.Count || _inFlight.Peek().IsDone))
+            {
+                Retire(_inFlight.Dequeue());
+            }
+
+            job.Queue(frame is not null);
+            if (frame is not null)
+            {
+                frame.Pending = job;
+            }
+
+            _inFlight.Enqueue(job);
+            workers.Submit(job);
+            return;
+        }
+
+        H265PictureRunner.Run(job, _contextStore);
+        job.Wait();
+        _idleJobs.Push(job);
+    }
+
+    /// <summary>Moves the frames that are complete from the list of released frames to the output, in order.</summary>
+    /// <param name="output">Receives the frames.</param>
+    /// <param name="force">Whether to wait for the frames that are not complete yet.</param>
+    private void Drain(List<VideoFrame> output, bool force)
+    {
+        var taken = 0;
+        try
+        {
+            while (taken < _ready.Count)
+            {
+                var frame = _ready[taken];
+                if (frame.Pending is H265PictureJob job)
+                {
+                    if (!force && !job.IsDone)
+                    {
+                        break;
+                    }
+
+                    frame.Pending = null;
+                    taken++;
+                    var keep = job.Settle();
+                    job.Wait();
+                    if (keep)
+                    {
+                        _idleJobs.Push(job);
+                    }
+                }
+                else
+                {
+                    taken++;
+                }
+
+                output.Add(frame);
+            }
+        }
+        finally
+        {
+            _ready.RemoveRange(0, taken);
+        }
     }
 
     /// <summary>Finds a picture to decode into: one the buffer no longer holds, made like new, or a new one when every kept picture is still in the buffer.</summary>
@@ -560,7 +725,7 @@ public sealed class H265Decoder : VideoDecoder
 
         foreach (var candidate in _pool)
         {
-            if (_dpb.Pictures.Contains(candidate))
+            if (_dpb.Pictures.Contains(candidate) || !candidate.IsIdle())
             {
                 continue;
             }
@@ -625,20 +790,13 @@ public sealed class H265Decoder : VideoDecoder
     private void BumpOne(List<VideoFrame> output)
     {
         var picture = _dpb.TakeNext();
-        if (picture?.Sps is not { } sps)
+        if (picture?.OutputFrame is not { } frame)
         {
             return;
         }
 
-        if (picture.HardwareFrame is { } frame)
-        {
-            picture.HardwareFrame = null;
-            output.Add(frame);
-            return;
-        }
-
-        var shown = H265FrameConverter.ShownSize(sps);
-        output.Add(H265FrameConverter.Convert(picture, sps, RentFrame(shown.Width, shown.Height, picture.Time)));
+        picture.OutputFrame = null;
+        output.Add(frame);
     }
 
     /// <summary>Outputs every waiting picture in output order.</summary>
@@ -662,16 +820,18 @@ public sealed class H265Decoder : VideoDecoder
         }
 
         _context = null;
-        if (_hardware is null)
+        var picture = context.Picture;
+        if (_job is { } job)
         {
-            H265LoopFilter.Apply(context);
+            _job = null;
+            picture.OutputFrame = job.Frame;
+            Dispatch(job);
         }
         else
         {
             DecodeOnHardware(context);
         }
 
-        var picture = context.Picture;
         picture.ReferenceState = 1;
         picture.LatencyCount = 0;
         if (picture.NeededForOutput)
@@ -730,6 +890,7 @@ public sealed class H265Decoder : VideoDecoder
         Array.Fill(picture.Luma, (ushort)(1 << (sps.BitDepthLuma - 1)));
         Array.Fill(picture.Cb, (ushort)(1 << (sps.BitDepthChroma - 1)));
         Array.Fill(picture.Cr, (ushort)(1 << (sps.BitDepthChroma - 1)));
+        picture.FinishDecoding();
         return picture;
     }
 }

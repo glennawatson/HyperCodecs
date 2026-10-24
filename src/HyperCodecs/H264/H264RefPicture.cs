@@ -21,7 +21,7 @@ internal sealed class H264RefPicture
     }
 
     /// <summary>Gets the decoded frame.</summary>
-    internal H264Picture Picture { get; }
+    internal H264Picture Picture { get; private set; }
 
     /// <summary>Gets or sets the frame_num of the frame.</summary>
     internal int FrameNum { get; set; }
@@ -34,4 +34,15 @@ internal sealed class H264RefPicture
 
     /// <summary>Gets or sets the long-term frame index when the frame is a long-term reference.</summary>
     internal int LongTermFrameIdx { get; set; }
+
+    /// <summary>Makes this entry a copy of another, so a slice can keep the marking the frame had when the slice was read.</summary>
+    /// <param name="other">The entry to copy.</param>
+    internal void Assign(H264RefPicture other)
+    {
+        Picture = other.Picture;
+        FrameNum = other.FrameNum;
+        FrameNumWrap = other.FrameNumWrap;
+        IsLongTerm = other.IsLongTerm;
+        LongTermFrameIdx = other.LongTermFrameIdx;
+    }
 }

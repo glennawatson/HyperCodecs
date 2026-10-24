@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace HyperCodecs.H264;
 
@@ -31,6 +32,30 @@ internal sealed class H264Picture
     /// <summary>The reference index of a block that is intra coded or not decoded.</summary>
     internal const sbyte NoReference = -1;
 
+    /// <summary>The state of a picture whose macroblocks are still being decoded.</summary>
+    private const int Running = 0;
+
+    /// <summary>The state of a picture whose decoding has finished.</summary>
+    private const int Finished = 1;
+
+    /// <summary>The state of a picture whose decoding has failed.</summary>
+    private const int Aborted = 2;
+
+    /// <summary>The lines of luma, counting from the top of the picture, that the filtering will no longer change.</summary>
+    private const int FilterReach = 3;
+
+    /// <summary>Wakes the threads decoding later pictures that wait for this one.</summary>
+    private readonly ProgressGate _gate = new();
+
+    /// <summary>Whether the picture is still being decoded, has been decoded, or failed.</summary>
+    private int _decoding;
+
+    /// <summary>The number of luma lines from the top that are final.</summary>
+    private int _finalLines;
+
+    /// <summary>The number of decoding jobs that use the picture, as the one decoding into it or as a reference.</summary>
+    private int _users;
+
     /// <summary>Initializes a new instance of the <see cref="H264Picture"/> class.</summary>
     /// <param name="columns">The width in macroblocks.</param>
     /// <param name="rows">The height in macroblocks.</param>
@@ -43,6 +68,8 @@ internal sealed class H264Picture
         Cb = new byte[count * ChromaSize * ChromaSize];
         Cr = new byte[count * ChromaSize * ChromaSize];
         SliceOfMb = new int[count];
+        RowsDecoded = new int[rows];
+        SliceFilters = new H264SliceFilter[count];
         Kinds = new byte[count];
         IntraModes = new byte[count * LumaSize];
         Counts = new byte[count * CountsPerMb];
@@ -64,6 +91,12 @@ internal sealed class H264Picture
     /// <summary>Gets the height in macroblocks.</summary>
     internal int MbHeight { get; }
 
+    /// <summary>Gets the lines of luma in the picture.</summary>
+    internal int LumaLines => MbHeight * LumaSize;
+
+    /// <summary>Gets the number of rows of macroblocks the deblocking filter has been run on. Only the thread decoding the picture reads this.</summary>
+    internal int FilteredRows { get; private set; }
+
     /// <summary>Gets the bytes in a row of the luma plane.</summary>
     internal int LumaStride => MbWidth * LumaSize;
 
@@ -81,6 +114,9 @@ internal sealed class H264Picture
 
     /// <summary>Gets the number of the slice each macroblock belongs to, or -1 for a macroblock not yet decoded.</summary>
     internal int[] SliceOfMb { get; }
+
+    /// <summary>Gets how many macroblocks of each row have been decoded, which a thread filtering the rows alongside the decoding follows.</summary>
+    internal int[] RowsDecoded { get; }
 
     /// <summary>Gets the kind of each macroblock.</summary>
     internal byte[] Kinds { get; }
@@ -142,8 +178,8 @@ internal sealed class H264Picture
     /// <summary>Gets or sets the offset of the Cr quantiser from the luma quantiser, which the deblocking filter needs.</summary>
     internal int ChromaQpOffsetCr { get; set; }
 
-    /// <summary>Gets the deblocking filter settings of each slice, in the order the slices were decoded.</summary>
-    internal List<H264SliceFilter> SliceFilters { get; } = [];
+    /// <summary>Gets the deblocking filter settings of each slice, in the order the slices were decoded. There is room for a slice of a single macroblock each.</summary>
+    internal H264SliceFilter[] SliceFilters { get; }
 
     /// <summary>Gets a value for each macroblock saying whether it was skipped.</summary>
     internal bool[] Skipped { get; }
@@ -157,6 +193,92 @@ internal sealed class H264Picture
     /// <summary>Gets which 8x8 groups of each macroblock got their motion by direct prediction: bit 0 is the first group.</summary>
     internal byte[] DirectGroups { get; }
 
+    /// <summary>Records that a macroblock has been decoded. Only the thread decoding the picture calls this.</summary>
+    /// <param name="address">The macroblock's address.</param>
+    /// <returns><see langword="true"/> when the macroblock was the last of its row to be decoded.</returns>
+    internal bool MacroblockDecoded(int address)
+    {
+        ref var count = ref RowsDecoded[address / MbWidth];
+        var next = count + 1;
+        Volatile.Write(ref count, next);
+        if (next != MbWidth)
+        {
+            return false;
+        }
+
+        _gate.Pulse();
+        return true;
+    }
+
+    /// <summary>Tells whether a row can be filtered: the row and the one below it are decoded, and the one below holds the last reads of the row's samples.</summary>
+    /// <param name="row">The row.</param>
+    /// <returns><see langword="true"/> when it can.</returns>
+    internal bool CanFilter(int row) => RowsDecoded[row] >= MbWidth && RowsDecoded[Math.Min(row + 1, MbHeight - 1)] >= MbWidth;
+
+    /// <summary>Records that the next row has been filtered, which makes the lines above the reach of the next row's filtering final. Only the thread decoding the picture calls this.</summary>
+    internal void RowFiltered()
+    {
+        FilteredRows++;
+        Volatile.Write(ref _finalLines, FilteredRows == MbHeight ? LumaLines : (FilteredRows * LumaSize) - FilterReach);
+        _gate.Pulse();
+    }
+
+    /// <summary>Says that the picture is decoded and filtered, so every line of it is final.</summary>
+    internal void FinishDecoding()
+    {
+        Volatile.Write(ref _finalLines, LumaLines);
+        Volatile.Write(ref _decoding, Finished);
+        _gate.Pulse();
+    }
+
+    /// <summary>Says that decoding has failed, so pictures that wait for this one should stop.</summary>
+    internal void AbortDecoding()
+    {
+        Volatile.Write(ref _decoding, Aborted);
+        _gate.Pulse();
+    }
+
+    /// <summary>Notes that a decoding job uses this picture, so it is not decoded into again until the job is done with it.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Acquire() => Interlocked.Increment(ref _users);
+
+    /// <summary>Notes that a decoding job is done with this picture.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Release() => Interlocked.Decrement(ref _users);
+
+    /// <summary>Waits until a line of luma is final, so it can be read as a reference.</summary>
+    /// <param name="line">The line, from 0 to one less than <see cref="LumaLines"/>.</param>
+    /// <param name="tokens">The caller's tokens, to give up while it sleeps, or <see langword="null"/>.</param>
+    /// <exception cref="InvalidDataException">The picture failed to decode.</exception>
+    internal void WaitForLines(int line, WorkTokens? tokens)
+    {
+        if (line < Volatile.Read(ref _finalLines))
+        {
+            return;
+        }
+
+        _gate.Wait(new LinesFinal(this, line), tokens);
+    }
+
+    /// <summary>Waits until a row of macroblocks is decoded, so its motion can be read for direct prediction.</summary>
+    /// <param name="row">The row.</param>
+    /// <param name="tokens">The caller's tokens, to give up while it sleeps, or <see langword="null"/>.</param>
+    /// <exception cref="InvalidDataException">The picture failed to decode.</exception>
+    internal void WaitForDecodedRow(int row, WorkTokens? tokens)
+    {
+        if (Volatile.Read(ref RowsDecoded[row]) >= MbWidth)
+        {
+            return;
+        }
+
+        _gate.Wait(new RowDecoded(this, row), tokens);
+    }
+
+    /// <summary>Tells whether no decoding job uses the picture.</summary>
+    /// <returns><see langword="true"/> when it can be decoded into again.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool IsIdle() => Volatile.Read(ref _users) == 0;
+
     /// <summary>Marks a macroblock as having no motion, as an intra macroblock does, and as not skipped.</summary>
     /// <param name="address">The macroblock's address.</param>
     internal void ClearMotion(int address)
@@ -169,8 +291,11 @@ internal sealed class H264Picture
         Field1.Clear(address);
     }
 
-    /// <summary>Returns the picture to the state a new one has, so a picture nothing refers to any more can be decoded into again.</summary>
-    internal void Recycle()
+    /// <summary>
+    /// Clears what decoding the picture before left in its arrays, so they hold what a new picture's do. This is the larger part of getting a picture ready
+    /// to be decoded into again, and the thread that decodes the picture does it, so the thread that reads the packets does not have to.
+    /// </summary>
+    internal void ClearData()
     {
         // Decoding writes every sample of a macroblock, so the planes of a picture whose macroblocks were all decoded hold nothing that needs clearing.
         if (Array.IndexOf(SliceOfMb, -1) >= 0)
@@ -192,12 +317,20 @@ internal sealed class H264Picture
         Array.Clear(DirectGroups);
         Field0.Recycle();
         Field1.Recycle();
-        SliceFilters.Clear();
+        ResetMacroblocks();
+    }
+
+    /// <summary>Returns the picture's state to the state a new one has, so a picture nothing refers to any more can be decoded into again. <see cref="ClearData"/> does the rest.</summary>
+    internal void Recycle()
+    {
+        Array.Clear(RowsDecoded);
+        FilteredRows = 0;
+        Volatile.Write(ref _finalLines, 0);
+        Volatile.Write(ref _decoding, Running);
         Uid = 0;
         Poc = 0;
         ChromaQpOffsetCb = 0;
         ChromaQpOffsetCr = 0;
-        ResetMacroblocks();
     }
 
     /// <summary>Marks every macroblock as not decoded.</summary>
@@ -205,5 +338,51 @@ internal sealed class H264Picture
     {
         Array.Fill(SliceOfMb, -1);
         Array.Clear(Kinds);
+    }
+
+    /// <summary>Throws when the picture failed to decode, so a picture that waits for it does not wait for ever.</summary>
+    /// <exception cref="InvalidDataException">The picture failed to decode.</exception>
+    private void ThrowIfAborted()
+    {
+        if (Volatile.Read(ref _decoding) == Aborted)
+        {
+            throw new InvalidDataException("An H.264 picture that a later picture refers to failed to decode.");
+        }
+    }
+
+    /// <summary>Waits for a line of luma to be final.</summary>
+    /// <param name="Picture">The picture.</param>
+    /// <param name="Line">The line.</param>
+    private readonly record struct LinesFinal(H264Picture Picture, int Line) : IProgressCondition
+    {
+        /// <inheritdoc/>
+        public bool IsMet()
+        {
+            if (Line < Volatile.Read(ref Picture._finalLines))
+            {
+                return true;
+            }
+
+            Picture.ThrowIfAborted();
+            return false;
+        }
+    }
+
+    /// <summary>Waits for a row of macroblocks to be decoded.</summary>
+    /// <param name="Picture">The picture.</param>
+    /// <param name="Row">The row.</param>
+    private readonly record struct RowDecoded(H264Picture Picture, int Row) : IProgressCondition
+    {
+        /// <inheritdoc/>
+        public bool IsMet()
+        {
+            if (Volatile.Read(ref Picture.RowsDecoded[Row]) >= Picture.MbWidth || Volatile.Read(ref Picture._decoding) == Finished)
+            {
+                return true;
+            }
+
+            Picture.ThrowIfAborted();
+            return false;
+        }
     }
 }
