@@ -33,6 +33,9 @@ internal static class H264Deblocking
     /// <summary>The disable_deblocking_filter_idc value that filters everything but the edges between slices.</summary>
     private const int FilterInsideSlices = 2;
 
+    /// <summary>The bits of the four 4x4 blocks of an 8x8 block in a coefficient mask, when the block's first bit is bit 0.</summary>
+    private const int EightByEightBits = 0x33;
+
     /// <summary>The boundary strength of an edge between macroblocks when one side is intra coded.</summary>
     private const int IntraMacroblockEdge = 4;
 
@@ -116,15 +119,146 @@ internal static class H264Deblocking
     /// <param name="strength">Receives the strengths.</param>
     private static void FillInterStrengths(H264Picture picture, int address, H264EdgeFlags filtered, Span<int> strength)
     {
+        // The coefficient flags of the macroblock and its neighbours are worked out once, and a macroblock whose blocks all move alike has no
+        // motion difference inside it, so the edges inside it need no comparison of vectors.
+        var self = new H264EdgeBlocks(address, CodedMask(picture, address), H264MotionCompare.IsUniform(picture, address));
+        H264EdgeBlocks? left = filtered.Left ? NeighbourBlocks(picture, address - 1) : null;
+        H264EdgeBlocks? top = filtered.Top ? NeighbourBlocks(picture, address - picture.MbWidth) : null;
+        var transform8x8 = picture.Transform8x8[address];
         for (var edge = 0; edge < Side; edge++)
         {
+            var skipInner = (edge & 1) == 1 && transform8x8;
             for (var segment = 0; segment < Side; segment++)
             {
-                var skipInner = (edge & 1) == 1 && picture.Transform8x8[address];
-                strength[(edge * Side) + segment] = !skipInner && (edge > 0 || filtered.Left) ? VerticalStrength(picture, address, edge, segment) : 0;
-                strength[PerDirection + (edge * Side) + segment] = !skipInner && (edge > 0 || filtered.Top) ? HorizontalStrength(picture, address, edge, segment) : 0;
+                strength[(edge * Side) + segment] = skipInner ? 0 : VerticalStrength(picture, self, left, edge, segment);
+                strength[PerDirection + (edge * Side) + segment] = skipInner ? 0 : HorizontalStrength(picture, self, top, edge, segment);
             }
         }
+    }
+
+    /// <summary>Works out the strength of one segment of a vertical edge of an inter macroblock.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="self">The macroblock.</param>
+    /// <param name="left">The macroblock on the left, or <see langword="null"/> when its edge is not filtered.</param>
+    /// <param name="edge">The edge, counting from the left.</param>
+    /// <param name="segment">The segment, counting from the top.</param>
+    /// <returns>The strength.</returns>
+    private static int VerticalStrength(H264Picture picture, H264EdgeBlocks self, H264EdgeBlocks? left, int edge, int segment)
+    {
+        if (edge > 0)
+        {
+            return InnerStrength(picture, self, new(edge, segment), new(edge - 1, segment));
+        }
+
+        return left is { } other ? MacroblockEdgeStrength(picture, self, other, new(0, segment), new(Side - 1, segment)) : 0;
+    }
+
+    /// <summary>Works out the strength of one segment of a horizontal edge of an inter macroblock.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="self">The macroblock.</param>
+    /// <param name="top">The macroblock above, or <see langword="null"/> when its edge is not filtered.</param>
+    /// <param name="edge">The edge, counting from the top.</param>
+    /// <param name="segment">The segment, counting from the left.</param>
+    /// <returns>The strength.</returns>
+    private static int HorizontalStrength(H264Picture picture, H264EdgeBlocks self, H264EdgeBlocks? top, int edge, int segment)
+    {
+        if (edge > 0)
+        {
+            return InnerStrength(picture, self, new(segment, edge), new(segment, edge - 1));
+        }
+
+        return top is { } other ? MacroblockEdgeStrength(picture, self, other, new(segment, 0), new(segment, Side - 1)) : 0;
+    }
+
+    /// <summary>Gathers what the strength of an edge between macroblocks needs to know about the macroblock on the far side.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="address">The neighbouring macroblock.</param>
+    /// <returns>Its address and coefficient flags, with the uniform flag unused; an intra macroblock has no flags.</returns>
+    private static H264EdgeBlocks NeighbourBlocks(H264Picture picture, int address) =>
+        picture.Kinds[address] == H264MbKind.Inter ? new(address, CodedMask(picture, address), false) : new(address, -1, false);
+
+    /// <summary>Works out the strength of a segment of an edge inside an inter macroblock, which is 2 next to coefficients and otherwise 1 where the motion differs.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="self">The macroblock.</param>
+    /// <param name="after">The 4x4 block on the right of or below the edge.</param>
+    /// <param name="before">The 4x4 block on the left of or above the edge.</param>
+    /// <returns>The strength, 0 to 2.</returns>
+    private static int InnerStrength(H264Picture picture, H264EdgeBlocks self, SamplePlace after, SamplePlace before)
+    {
+        if (((self.Coded >> BitOf(after)) & 1) != 0 || ((self.Coded >> BitOf(before)) & 1) != 0)
+        {
+            return CoefficientEdge;
+        }
+
+        if (self.Uniform)
+        {
+            return 0;
+        }
+
+        H264BlockAt afterBlock = new(self.Address, after.Column, after.Row);
+        H264BlockAt beforeBlock = new(self.Address, before.Column, before.Row);
+        return H264MotionCompare.Differs(picture, afterBlock, beforeBlock) ? 1 : 0;
+    }
+
+    /// <summary>Works out the strength of a segment of an edge between two macroblocks, the left or upper one being <paramref name="other"/>.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="self">The inter macroblock.</param>
+    /// <param name="other">The macroblock across the edge; its flags are -1 when it is intra coded.</param>
+    /// <param name="after">The 4x4 block of the macroblock.</param>
+    /// <param name="before">The 4x4 block of the other macroblock.</param>
+    /// <returns>The strength, 0 to 4.</returns>
+    private static int MacroblockEdgeStrength(H264Picture picture, H264EdgeBlocks self, H264EdgeBlocks other, SamplePlace after, SamplePlace before)
+    {
+        if (other.Coded < 0)
+        {
+            return IntraMacroblockEdge;
+        }
+
+        if (((self.Coded >> BitOf(after)) & 1) != 0 || ((other.Coded >> BitOf(before)) & 1) != 0)
+        {
+            return CoefficientEdge;
+        }
+
+        H264BlockAt afterBlock = new(self.Address, after.Column, after.Row);
+        H264BlockAt beforeBlock = new(other.Address, before.Column, before.Row);
+        return H264MotionCompare.Differs(picture, afterBlock, beforeBlock) ? 1 : 0;
+    }
+
+    /// <summary>Gets the bit of a 4x4 block in a coefficient mask.</summary>
+    /// <param name="block">The block's column and row.</param>
+    /// <returns>The bit number.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int BitOf(SamplePlace block) => (block.Row * Side) + block.Column;
+
+    /// <summary>Finds which 4x4 blocks of a macroblock are in a transform block with non-zero coefficients: the block, or its 8x8 block with the 8x8 transform.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="address">The macroblock.</param>
+    /// <returns>One bit for each block, row after row.</returns>
+    private static int CodedMask(H264Picture picture, int address)
+    {
+        var counts = picture.Counts.AsSpan(address * H264Picture.CountsPerMb, PerDirection);
+        if (!picture.Transform8x8[address])
+        {
+            var mask = 0;
+            for (var bit = 0; bit < counts.Length; bit++)
+            {
+                mask |= counts[bit] != 0 ? 1 << bit : 0;
+            }
+
+            return mask;
+        }
+
+        var coded = 0;
+        for (var group = 0; group < Side; group++)
+        {
+            var first = ((group >> 1) * Half * Side) + ((group & 1) * Half);
+            if ((counts[first] | counts[first + 1] | counts[first + Side] | counts[first + Side + 1]) != 0)
+            {
+                coded |= EightByEightBits << first;
+            }
+        }
+
+        return coded;
     }
 
     /// <summary>Gives every edge segment of an intra macroblock its strength: the same for a whole edge, so no neighbour needs to be looked at.</summary>
@@ -142,67 +276,6 @@ internal static class H264Deblocking
             strength.Slice(edge * Side, Side).Fill(vertical);
             strength.Slice(PerDirection + (edge * Side), Side).Fill(horizontal);
         }
-    }
-
-    /// <summary>Works out the strength of one segment of a vertical edge.</summary>
-    /// <param name="picture">The frame.</param>
-    /// <param name="address">The macroblock.</param>
-    /// <param name="edge">The edge, counting from the left.</param>
-    /// <param name="segment">The segment, counting from the top.</param>
-    /// <returns>The strength.</returns>
-    private static int VerticalStrength(H264Picture picture, int address, int edge, int segment)
-    {
-        H264BlockAt before = edge == 0 ? new(address - 1, Side - 1, segment) : new(address, edge - 1, segment);
-        return Strength(picture, new(address, edge, segment), before, edge == 0);
-    }
-
-    /// <summary>Works out the strength of one segment of a horizontal edge.</summary>
-    /// <param name="picture">The frame.</param>
-    /// <param name="address">The macroblock.</param>
-    /// <param name="edge">The edge, counting from the top.</param>
-    /// <param name="segment">The segment, counting from the left.</param>
-    /// <returns>The strength.</returns>
-    private static int HorizontalStrength(H264Picture picture, int address, int edge, int segment)
-    {
-        H264BlockAt above = edge == 0 ? new(address - picture.MbWidth, segment, Side - 1) : new(address, segment, edge - 1);
-        return Strength(picture, new(address, segment, edge), above, edge == 0);
-    }
-
-    /// <summary>Tells whether the transform block that holds a 4x4 block has non-zero coefficients: the 4x4 block itself, or its whole 8x8 block when the macroblock uses the 8x8 transform.</summary>
-    /// <param name="picture">The frame.</param>
-    /// <param name="block">The 4x4 block.</param>
-    /// <returns><see langword="true"/> when it has.</returns>
-    private static bool HasCoefficients(H264Picture picture, H264BlockAt block)
-    {
-        var origin = block.Address * H264Picture.CountsPerMb;
-        if (!picture.Transform8x8[block.Address])
-        {
-            return picture.Counts[origin + (block.Row * Side) + block.Column] != 0;
-        }
-
-        var first = origin + (((block.Row >> 1) * Half) * Side) + ((block.Column >> 1) * Half);
-        return (picture.Counts[first] | picture.Counts[first + 1] | picture.Counts[first + Side] | picture.Counts[first + Side + 1]) != 0;
-    }
-
-    /// <summary>Works out the strength of one segment of an edge.</summary>
-    /// <param name="picture">The frame.</param>
-    /// <param name="after">The block on the right of or below the edge.</param>
-    /// <param name="before">The block on the left of or above the edge.</param>
-    /// <param name="macroblockEdge">Whether the edge is between macroblocks.</param>
-    /// <returns>The strength, 0 to 4.</returns>
-    private static int Strength(H264Picture picture, H264BlockAt after, H264BlockAt before, bool macroblockEdge)
-    {
-        if (picture.Kinds[after.Address] != H264MbKind.Inter || picture.Kinds[before.Address] != H264MbKind.Inter)
-        {
-            return macroblockEdge ? IntraMacroblockEdge : IntraEdge;
-        }
-
-        if (HasCoefficients(picture, after) || HasCoefficients(picture, before))
-        {
-            return CoefficientEdge;
-        }
-
-        return H264MotionCompare.Differs(picture, after, before) ? 1 : 0;
     }
 
     /// <summary>Filters the edges of one plane of a macroblock: the vertical edges from left to right, then the horizontal edges from top to bottom.</summary>

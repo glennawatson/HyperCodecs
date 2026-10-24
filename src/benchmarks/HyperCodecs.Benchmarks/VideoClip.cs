@@ -37,9 +37,16 @@ internal sealed class VideoClip : IDisposable
     /// <param name="name">The file name in the fixtures folder next to the benchmarks.</param>
     /// <returns>The clip.</returns>
     /// <exception cref="InvalidDataException">The file did not open, or no decoder reads its pictures.</exception>
-    internal static VideoClip Load(string name)
+    internal static VideoClip Load(string name) => LoadFile(Path.Combine(AppContext.BaseDirectory, "Fixtures", name));
+
+    /// <summary>Reads the coded pictures of a file.</summary>
+    /// <param name="path">The path of the file.</param>
+    /// <returns>The clip.</returns>
+    /// <exception cref="InvalidDataException">The file did not open, or no decoder reads its pictures.</exception>
+    internal static VideoClip LoadFile(string path)
     {
-        using var container = MediaContainers.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", name))
+        var name = Path.GetFileName(path);
+        using var container = MediaContainers.Open(path)
             ?? throw new InvalidDataException($"{name} did not open.");
         var index = container.FindTrack(MediaTrackKind.Video);
         var packets = new List<MediaPacket>();

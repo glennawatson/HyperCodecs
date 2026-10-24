@@ -16,6 +16,32 @@ internal static class H264MotionCompare
     /// <summary>The 4x4 blocks along the side of an 8x8 group.</summary>
     private const int Half = 2;
 
+    /// <summary>Tells whether every block of a macroblock has the same reference frames and vectors, so no edge inside it separates different motion.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="address">The macroblock.</param>
+    /// <returns><see langword="true"/> when the reference frames and vectors of all its blocks are equal.</returns>
+    internal static bool IsUniform(H264Picture picture, int address)
+    {
+        var vectors = address * H264Picture.BlocksPerMb;
+        var groups = address * H264Picture.GroupsPerMb;
+        return AllEqual(picture.Field0.MvX.AsSpan(vectors, H264Picture.BlocksPerMb))
+            && AllEqual(picture.Field0.MvY.AsSpan(vectors, H264Picture.BlocksPerMb))
+            && AllEqual(picture.Field1.MvX.AsSpan(vectors, H264Picture.BlocksPerMb))
+            && AllEqual(picture.Field1.MvY.AsSpan(vectors, H264Picture.BlocksPerMb))
+            && AllEqual(picture.Field0.RefUid.AsSpan(groups, H264Picture.GroupsPerMb))
+            && AllEqual(picture.Field1.RefUid.AsSpan(groups, H264Picture.GroupsPerMb));
+    }
+
+    /// <summary>Tells whether every 8x8 group of a macroblock uses the same reference index in each list.</summary>
+    /// <param name="picture">The frame.</param>
+    /// <param name="address">The macroblock.</param>
+    /// <returns><see langword="true"/> when the indices of the four groups are equal in both lists.</returns>
+    internal static bool HasUniformIndices(H264Picture picture, int address)
+    {
+        var groups = address * H264Picture.GroupsPerMb;
+        return AllEqual(picture.Field0.RefIdx.AsSpan(groups, H264Picture.GroupsPerMb)) && AllEqual(picture.Field1.RefIdx.AsSpan(groups, H264Picture.GroupsPerMb));
+    }
+
     /// <summary>Tells whether the motion of two blocks differs.</summary>
     /// <param name="picture">The frame.</param>
     /// <param name="first">One block.</param>
@@ -54,6 +80,13 @@ internal static class H264MotionCompare
 
         return same ? straight : crossed;
     }
+
+    /// <summary>Tells whether every value of a run is the same as the first.</summary>
+    /// <typeparam name="T">The value type.</typeparam>
+    /// <param name="values">The values.</param>
+    /// <returns><see langword="true"/> when they are all equal.</returns>
+    private static bool AllEqual<T>(ReadOnlySpan<T> values)
+        where T : IEquatable<T> => values.IndexOfAnyExcept(values[0]) < 0;
 
     /// <summary>Tells whether two vectors are far enough apart to count as different motion.</summary>
     /// <param name="a">One vector.</param>

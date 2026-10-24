@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 
@@ -12,6 +13,12 @@ internal static class H264MotionCompensation
 {
     /// <summary>The number of 32 bit values in a 128 bit vector.</summary>
     private const int Lanes = 4;
+
+    /// <summary>The width of the chroma block of a 16x16 luma block, which is blended eight samples at a time.</summary>
+    private const int ChromaWide = 8;
+
+    /// <summary>The width of the chroma block of an 8x8 luma block, which is blended four samples at a time.</summary>
+    private const int ChromaNarrow = 4;
 
     /// <summary>The largest block, in samples along a side.</summary>
     private const int MaxBlock = 16;
@@ -231,11 +238,24 @@ internal static class H264MotionCompensation
         var topRight = fractionX * (ChromaScale - fractionY);
         var bottomLeft = (ChromaScale - fractionX) * fractionY;
         var bottomRight = fractionX * fractionY;
+        var weights = new H264ChromaTaps(topLeft, topRight, bottomLeft, bottomRight);
         for (var row = 0; row < source.Height; row++)
         {
             var upper = reference.AsSpan(((source.Y + row) * stride) + source.X, source.Width + 1);
             var lower = reference.AsSpan(((source.Y + row + 1) * stride) + source.X, source.Width + 1);
             var destination = target.Plane.AsSpan(((target.Y + row) * target.Stride) + target.X, source.Width);
+            if (Vector128.IsHardwareAccelerated && destination.Length == ChromaWide)
+            {
+                BlendRowWide(upper, lower, destination, weights);
+                continue;
+            }
+
+            if (Vector128.IsHardwareAccelerated && destination.Length == ChromaNarrow)
+            {
+                BlendRowNarrow(upper, lower, destination, weights);
+                continue;
+            }
+
             for (var column = 0; column < destination.Length; column++)
             {
                 var sum = (topLeft * upper[column]) + (topRight * upper[column + 1]) + (bottomLeft * lower[column]) + (bottomRight * lower[column + 1]);
@@ -243,6 +263,51 @@ internal static class H264MotionCompensation
             }
         }
     }
+
+    /// <summary>Blends a row of eight chroma samples from the two rows above and below them. Every sum is at most 64 times 255, so it fits in 16 bits.</summary>
+    /// <param name="upper">The upper row, nine samples.</param>
+    /// <param name="lower">The lower row, nine samples.</param>
+    /// <param name="destination">Receives the eight samples.</param>
+    /// <param name="weights">The weights of the four neighbouring samples.</param>
+    private static void BlendRowWide(ReadOnlySpan<byte> upper, ReadOnlySpan<byte> lower, Span<byte> destination, H264ChromaTaps weights)
+    {
+        var sum = (Widen8(upper[..ChromaWide]) * Vector128.Create((ushort)weights.TopLeft))
+            + (Widen8(upper.Slice(1, ChromaWide)) * Vector128.Create((ushort)weights.TopRight))
+            + (Widen8(lower[..ChromaWide]) * Vector128.Create((ushort)weights.BottomLeft))
+            + (Widen8(lower.Slice(1, ChromaWide)) * Vector128.Create((ushort)weights.BottomRight))
+            + Vector128.Create((ushort)ChromaRound);
+        sum = Vector128.ShiftRightLogical(sum, ChromaShift);
+        Vector128.Narrow(sum, sum).GetLower().CopyTo(destination);
+    }
+
+    /// <summary>Blends a row of four chroma samples from the two rows above and below them.</summary>
+    /// <param name="upper">The upper row, five samples.</param>
+    /// <param name="lower">The lower row, five samples.</param>
+    /// <param name="destination">Receives the four samples.</param>
+    /// <param name="weights">The weights of the four neighbouring samples.</param>
+    private static void BlendRowNarrow(ReadOnlySpan<byte> upper, ReadOnlySpan<byte> lower, Span<byte> destination, H264ChromaTaps weights)
+    {
+        var sum = (Widen4(upper[..ChromaNarrow]) * Vector128.Create((ushort)weights.TopLeft))
+            + (Widen4(upper.Slice(1, ChromaNarrow)) * Vector128.Create((ushort)weights.TopRight))
+            + (Widen4(lower[..ChromaNarrow]) * Vector128.Create((ushort)weights.BottomLeft))
+            + (Widen4(lower.Slice(1, ChromaNarrow)) * Vector128.Create((ushort)weights.BottomRight))
+            + Vector128.Create((ushort)ChromaRound);
+        sum = Vector128.ShiftRightLogical(sum, ChromaShift);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination, Vector128.Narrow(sum, sum).AsUInt32().ToScalar());
+    }
+
+    /// <summary>Loads eight bytes as 16 bit values.</summary>
+    /// <param name="samples">Exactly eight samples.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ushort> Widen8(ReadOnlySpan<byte> samples) => Vector128.WidenLower(Vector64.Create(samples).ToVector128Unsafe());
+
+    /// <summary>Loads four bytes as 16 bit values in the low four lanes.</summary>
+    /// <param name="samples">Exactly four samples.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<ushort> Widen4(ReadOnlySpan<byte> samples) =>
+        Vector128.WidenLower(Vector128.CreateScalar(BinaryPrimitives.ReadUInt32LittleEndian(samples)).AsByte());
 
     /// <summary>Averages two samples with rounding up.</summary>
     /// <param name="a">One sample.</param>

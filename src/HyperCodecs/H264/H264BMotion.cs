@@ -223,6 +223,22 @@ internal sealed class H264BMotion
         _predictor.Compensate(_mb, partition, new(first, second));
     }
 
+    /// <summary>
+    /// Predicts the whole macroblock in one piece when direct prediction gave all of it the same reference frames, reference indices and vectors. One block of
+    /// 16x16 gives the same samples as four of 8x8 with the same motion, and is cheaper.
+    /// </summary>
+    /// <returns><see langword="true"/> when the macroblock was predicted; <see langword="false"/> when its groups move differently.</returns>
+    internal bool CompensateUniform()
+    {
+        if (!H264MotionCompare.IsUniform(_picture, _mb.Address) || !H264MotionCompare.HasUniformIndices(_picture, _mb.Address))
+        {
+            return false;
+        }
+
+        Compensate(new(0, 0, Side, Side, H264MotionPrediction.Plain));
+        return true;
+    }
+
     /// <summary>Takes the smaller of two reference indices when both are valid, otherwise the other one.</summary>
     /// <param name="a">One index, -1 when missing.</param>
     /// <param name="b">The other index.</param>

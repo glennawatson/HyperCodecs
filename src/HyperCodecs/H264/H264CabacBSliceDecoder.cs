@@ -270,6 +270,15 @@ internal sealed class H264CabacBSliceDecoder
             _motion.Direct(group);
             _motion.MarkAbsent(0, GroupPartition(group));
             _motion.MarkAbsent(1, GroupPartition(group));
+        }
+
+        if (_motion.CompensateUniform())
+        {
+            return;
+        }
+
+        for (var group = 0; group < Groups; group++)
+        {
             CompensateDirect(group);
         }
     }

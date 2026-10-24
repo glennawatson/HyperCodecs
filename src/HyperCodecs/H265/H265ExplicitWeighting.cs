@@ -2,6 +2,8 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.Intrinsics;
+
 namespace HyperCodecs.H265;
 
 /// <summary>The explicit weighting of a prediction block (8-275 to 8-277).</summary>
@@ -25,6 +27,28 @@ internal readonly record struct H265ExplicitWeighting(bool UsesList0, bool UsesL
 
         return UsesList0 ? Single(sample0, First) : Single(sample1, Second);
     }
+
+    /// <summary>Weights four intermediate samples of each list into four samples, as <see cref="Combine(int, int)"/> does for one.</summary>
+    /// <param name="sample0">The samples of list 0.</param>
+    /// <param name="sample1">The samples of list 1.</param>
+    /// <returns>The weighted samples, before they are clipped.</returns>
+    internal Vector128<int> Combine(Vector128<int> sample0, Vector128<int> sample1)
+    {
+        if (UsesList0 && UsesList1)
+        {
+            var sum = (sample0 * Vector128.Create(First.Weight)) + (sample1 * Vector128.Create(Second.Weight)) + Vector128.Create((First.Offset + Second.Offset + 1) << Log2Wd);
+            return Vector128.ShiftRightArithmetic(sum, Log2Wd + 1);
+        }
+
+        return UsesList0 ? SingleVector(sample0, First) : SingleVector(sample1, Second);
+    }
+
+    /// <summary>Weights four samples of one list.</summary>
+    /// <param name="sample">The intermediate samples.</param>
+    /// <param name="weight">The weight and offset.</param>
+    /// <returns>The weighted samples.</returns>
+    private Vector128<int> SingleVector(Vector128<int> sample, H265Weight weight) =>
+        Vector128.ShiftRightArithmetic((sample * Vector128.Create(weight.Weight)) + Vector128.Create(1 << (Log2Wd - 1)), Log2Wd) + Vector128.Create(weight.Offset);
 
     /// <summary>Weights the samples of one list.</summary>
     /// <param name="sample">The intermediate sample.</param>

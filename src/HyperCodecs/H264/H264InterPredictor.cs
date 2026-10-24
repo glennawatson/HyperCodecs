@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 
 namespace HyperCodecs.H264;
@@ -40,6 +41,9 @@ internal sealed class H264InterPredictor
 
     /// <summary>The largest sample value.</summary>
     private const int MaxSample = 255;
+
+    /// <summary>The samples weighted at a time by the vector path.</summary>
+    private const int EightSamples = 8;
 
     /// <summary>The range limit of the picture order count differences used to scale vectors and weights.</summary>
     private const int DistanceLimit = 127;
@@ -164,12 +168,58 @@ internal sealed class H264InterPredictor
                 continue;
             }
 
-            for (var column = 0; column < block.Width; column++)
+            WeightRow(first.AsSpan(source, block.Width), second.AsSpan(source, block.Width), target.Plane.AsSpan(destination, block.Width), weights, offset);
+        }
+    }
+
+    /// <summary>Combines two rows of samples with weights, eight samples at a time where vectors are available.</summary>
+    /// <param name="first">The first row.</param>
+    /// <param name="second">The second row.</param>
+    /// <param name="destination">Receives the weighted samples.</param>
+    /// <param name="weights">The weights.</param>
+    /// <param name="offset">The offset added after weighting.</param>
+    private static void WeightRow(ReadOnlySpan<byte> first, ReadOnlySpan<byte> second, Span<byte> destination, H264PlaneWeights weights, int offset)
+    {
+        var done = 0;
+        if (Vector128.IsHardwareAccelerated)
+        {
+            var shift = weights.LogDenom + 1;
+            var firstWeight = Vector128.Create(weights.First);
+            var secondWeight = Vector128.Create(weights.Second);
+            var round = Vector128.Create(1 << weights.LogDenom);
+            var add = Vector128.Create(offset);
+            for (; done + EightSamples <= destination.Length; done += EightSamples)
             {
-                var value = ((((first[source + column] * weights.First) + (second[source + column] * weights.Second) + (1 << weights.LogDenom)) >> (weights.LogDenom + 1)) + offset);
-                target.Plane[destination + column] = (byte)Math.Clamp(value, 0, MaxSample);
+                var a = Vector128.WidenLower(Vector64.Create(first.Slice(done, EightSamples)).ToVector128Unsafe());
+                var b = Vector128.WidenLower(Vector64.Create(second.Slice(done, EightSamples)).ToVector128Unsafe());
+                var low = WeightLanes(Vector128.WidenLower(a), Vector128.WidenLower(b), firstWeight, secondWeight, round, add, shift);
+                var high = WeightLanes(Vector128.WidenUpper(a), Vector128.WidenUpper(b), firstWeight, secondWeight, round, add, shift);
+                var shorts = Vector128.Narrow(low.AsUInt32(), high.AsUInt32());
+                Vector128.Narrow(shorts, shorts).GetLower().CopyTo(destination.Slice(done, EightSamples));
             }
         }
+
+        for (; done < destination.Length; done++)
+        {
+            var value = ((((first[done] * weights.First) + (second[done] * weights.Second) + (1 << weights.LogDenom)) >> (weights.LogDenom + 1)) + offset);
+            destination[done] = (byte)Math.Clamp(value, 0, MaxSample);
+        }
+    }
+
+    /// <summary>Weights four pairs of samples and limits the results to the range of a sample.</summary>
+    /// <param name="a">Four samples of the first prediction.</param>
+    /// <param name="b">Four samples of the second prediction.</param>
+    /// <param name="firstWeight">The first weight in every lane.</param>
+    /// <param name="secondWeight">The second weight in every lane.</param>
+    /// <param name="round">The rounding term in every lane.</param>
+    /// <param name="add">The offset in every lane.</param>
+    /// <param name="shift">The right shift.</param>
+    /// <returns>The four samples.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> WeightLanes(Vector128<uint> a, Vector128<uint> b, Vector128<int> firstWeight, Vector128<int> secondWeight, Vector128<int> round, Vector128<int> add, int shift)
+    {
+        var sum = Vector128.ShiftRightArithmetic((a.AsInt32() * firstWeight) + (b.AsInt32() * secondWeight) + round, shift) + add;
+        return Vector128.Clamp(sum, Vector128<int>.Zero, Vector128.Create(MaxSample));
     }
 
     /// <summary>Averages two rows of samples with rounding up, sixteen samples at a time: (a + b + 1) >> 1 is (a | b) - ((a ^ b) >> 1) in every byte.</summary>

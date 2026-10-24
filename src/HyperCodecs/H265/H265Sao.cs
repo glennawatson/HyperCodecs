@@ -2,11 +2,27 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using HyperCodecs.H264;
+
 namespace HyperCodecs.H265;
 
 /// <summary>Applies sample adaptive offset to a deblocked picture (8.7.3).</summary>
 internal static class H265Sao
 {
+    /// <summary>The 16 bit samples in a 128 bit vector.</summary>
+    private const int ShortLanes = 8;
+
+    /// <summary>The sum of the two comparison signs of a valley.</summary>
+    private const short ValleySum = -2;
+
+    /// <summary>The sum of the two comparison signs of a peak.</summary>
+    private const short PeakSum = 2;
+
+    /// <summary>The largest bit depth the vector path takes: samples are held as signed 16 bit values, with room for the offsets.</summary>
+    private const int MaxVectorBits = 14;
+
     /// <summary>The bands of a band offset.</summary>
     private const int Bands = 32;
 
@@ -121,19 +137,38 @@ internal static class H265Sao
             table[(k + leftBand) & (Bands - 1)] = k + 1;
         }
 
-        var shift = block.BitDepth - BandBits;
-        var maximum = (1 << block.BitDepth) - 1;
         var area = block.Area;
+        var vectorWidth = Vector128.IsHardwareAccelerated && !protectedSamples && block.BitDepth <= MaxVectorBits ? area.Width & ~(ShortLanes - 1) : 0;
         for (var y = area.Y; y < area.Y + area.Height; y++)
         {
-            for (var x = area.X; x < area.X + area.Width; x++)
+            if (vectorWidth > 0)
             {
-                var index = (y * block.PlaneWidth) + x;
-                var band = table[block.Source[index] >> shift];
-                if (band != 0 && !(protectedSamples && IsProtected(context, block.Component, x, y)))
-                {
-                    block.Target[index] = (ushort)Math.Clamp(block.Source[index] + offsets[band - 1], 0, maximum);
-                }
+                BandRow(block, leftBand, offsets, (y * block.PlaneWidth) + area.X, vectorWidth);
+            }
+
+            BandSamples(context, block, table, offsets, new(area.X + vectorWidth, y), protectedSamples);
+        }
+    }
+
+    /// <summary>Applies band offset to the samples of a row from a column to the end of the block, one by one.</summary>
+    /// <param name="context">The slice context.</param>
+    /// <param name="block">The block.</param>
+    /// <param name="table">The offset number, 1 to 4, of each band; 0 for a band without an offset.</param>
+    /// <param name="offsets">The four offsets.</param>
+    /// <param name="from">The column to start at, and the row.</param>
+    /// <param name="protectedSamples">Whether some samples may be exempt because they are lossless.</param>
+    private static void BandSamples(H265SliceContext context, in H265SaoBlock block, ReadOnlySpan<int> table, ReadOnlySpan<int> offsets, SamplePlace from, bool protectedSamples)
+    {
+        var shift = block.BitDepth - BandBits;
+        var maximum = (1 << block.BitDepth) - 1;
+        var (start, y) = from;
+        for (var x = start; x < block.Area.X + block.Area.Width; x++)
+        {
+            var index = (y * block.PlaneWidth) + x;
+            var band = table[block.Source[index] >> shift];
+            if (band != 0 && !(protectedSamples && IsProtected(context, block.Component, x, y)))
+            {
+                block.Target[index] = (ushort)Math.Clamp(block.Source[index] + offsets[band - 1], 0, maximum);
             }
         }
     }
@@ -152,27 +187,149 @@ internal static class H265Sao
         var vertical0 = VerticalOffsets[edgeClass];
         var horizontal1 = HorizontalOffsets[edgeClass + EdgeClasses];
         var vertical1 = VerticalOffsets[edgeClass + EdgeClasses];
-        var maximum = (1 << block.BitDepth) - 1;
         var area = block.Area;
+        var limits = new H265SaoLimits((1 << block.BitDepth) - 1, protectedSamples, Vector128.IsHardwareAccelerated && !protectedSamples && block.BitDepth <= MaxVectorBits && area.Width >= Around);
+        var neighbours = new H265SaoNeighbours(horizontal0, vertical0, horizontal1, vertical1);
         for (var y = area.Y; y < area.Y + area.Height; y++)
         {
-            for (var x = area.X; x < area.X + area.Width; x++)
-            {
-                if (!Neighbour(block, allowed, x + horizontal0, y + vertical0) || !Neighbour(block, allowed, x + horizontal1, y + vertical1))
-                {
-                    continue;
-                }
+            EdgeLine(context, block, allowed, y, neighbours, offsets, limits);
+        }
+    }
 
-                var index = (y * block.PlaneWidth) + x;
-                int centre = block.Source[index];
-                int first = block.Source[((y + vertical0) * block.PlaneWidth) + x + horizontal0];
-                int second = block.Source[((y + vertical1) * block.PlaneWidth) + x + horizontal1];
-                var category = Categories[SignBias + Math.Sign(centre - first) + Math.Sign(centre - second)];
-                if (category != 0 && !(protectedSamples && IsProtected(context, block.Component, x, y)))
-                {
-                    block.Target[index] = (ushort)Math.Clamp(centre + offsets[category - 1], 0, maximum);
-                }
+    /// <summary>Applies edge offset to one row of a block: the samples inside the block eight at a time where vectors are available, and the samples at its ends one by one.</summary>
+    /// <param name="context">The slice context.</param>
+    /// <param name="block">The block.</param>
+    /// <param name="allowed">Whether each of the 3x3 coding tree blocks around the block may be used.</param>
+    /// <param name="y">The row.</param>
+    /// <param name="neighbours">The column and row distance from a sample to each of its two neighbours.</param>
+    /// <param name="offsets">The four offsets.</param>
+    /// <param name="limits">The largest sample value and which paths apply.</param>
+    private static void EdgeLine(
+        H265SliceContext context,
+        in H265SaoBlock block,
+        ReadOnlySpan<bool> allowed,
+        int y,
+        H265SaoNeighbours neighbours,
+        ReadOnlySpan<int> offsets,
+        H265SaoLimits limits)
+    {
+        var area = block.Area;
+        var from = area.X;
+        var to = area.X + area.Width;
+
+        // Samples that are not on the edge of the block have both neighbours in the block, so the vector path can take them without any checks.
+        var interior = limits.Vector && y > area.Y && y < area.Y + area.Height - 1;
+        if (interior)
+        {
+            from++;
+            to--;
+            var vectorEnd = from + ((to - from) & ~(ShortLanes - 1));
+            var plane = block.PlaneWidth;
+            EdgeRun(block, new((neighbours.Vertical0 * plane) + neighbours.Horizontal0, (neighbours.Vertical1 * plane) + neighbours.Horizontal1), offsets, (y * plane) + from, vectorEnd - from);
+            from = vectorEnd;
+            EdgeSample(context, block, allowed, new(area.X, y), neighbours, offsets, limits);
+            EdgeSample(context, block, allowed, new(to, y), neighbours, offsets, limits);
+        }
+
+        for (var x = from; x < to; x++)
+        {
+            EdgeSample(context, block, allowed, new(x, y), neighbours, offsets, limits);
+        }
+    }
+
+    /// <summary>Applies edge offset to one sample, checking that both neighbours may be used.</summary>
+    /// <param name="context">The slice context.</param>
+    /// <param name="block">The block.</param>
+    /// <param name="allowed">Whether each of the 3x3 coding tree blocks around the block may be used.</param>
+    /// <param name="at">The sample's column and row.</param>
+    /// <param name="neighbours">The column and row distance from a sample to each of its two neighbours.</param>
+    /// <param name="offsets">The four offsets.</param>
+    /// <param name="limits">The largest sample value and whether some samples may be exempt because they are lossless.</param>
+    private static void EdgeSample(
+        H265SliceContext context,
+        in H265SaoBlock block,
+        ReadOnlySpan<bool> allowed,
+        SamplePlace at,
+        H265SaoNeighbours neighbours,
+        ReadOnlySpan<int> offsets,
+        H265SaoLimits limits)
+    {
+        var (x, y) = at;
+        var plane = block.PlaneWidth;
+        var firstX = x + neighbours.Horizontal0;
+        var firstY = y + neighbours.Vertical0;
+        var secondX = x + neighbours.Horizontal1;
+        var secondY = y + neighbours.Vertical1;
+        if (!Neighbour(block, allowed, firstX, firstY) || !Neighbour(block, allowed, secondX, secondY))
+        {
+            return;
+        }
+
+        var index = (y * plane) + x;
+        int centre = block.Source[index];
+        var first = block.Source[(firstY * plane) + firstX];
+        var second = block.Source[(secondY * plane) + secondX];
+        var category = Categories[SignBias + Math.Sign(centre - first) + Math.Sign(centre - second)];
+        if (category != 0 && !(limits.Protected && IsProtected(context, block.Component, x, y)))
+        {
+            block.Target[index] = (ushort)Math.Clamp(centre + offsets[category - 1], 0, limits.Maximum);
+        }
+    }
+
+    /// <summary>Applies edge offset to a run of samples that all have both neighbours inside the block, eight at a time.</summary>
+    /// <param name="block">The block.</param>
+    /// <param name="steps">The distance in the plane from a sample to each of its two neighbours.</param>
+    /// <param name="offsets">The four offsets: valley, step, step, peak.</param>
+    /// <param name="start">The index in the plane of the first sample.</param>
+    /// <param name="count">The number of samples, a multiple of eight.</param>
+    private static void EdgeRun(in H265SaoBlock block, H265SaoSteps steps, ReadOnlySpan<int> offsets, int start, int count)
+    {
+        ReadOnlySpan<short> source = MemoryMarshal.Cast<ushort, short>(block.Source.AsSpan());
+        var target = MemoryMarshal.Cast<ushort, short>(block.Target.AsSpan());
+        var valley = Vector128.Create((short)offsets[0]);
+        var stepDown = Vector128.Create((short)offsets[1]);
+        var stepUp = Vector128.Create((short)offsets[2]);
+        var peak = Vector128.Create((short)offsets[3]);
+        var maximum = Vector128.Create((short)((1 << block.BitDepth) - 1));
+        for (var index = start; index < start + count; index += ShortLanes)
+        {
+            var centre = Vector128.Create(source.Slice(index, ShortLanes));
+            var first = Vector128.Create(source.Slice(index + steps.First, ShortLanes));
+            var second = Vector128.Create(source.Slice(index + steps.Second, ShortLanes));
+
+            // The sign of a difference is the count of smaller neighbours less the count of larger ones; the masks are -1 where true.
+            var sum = Vector128.LessThan(centre, first) - Vector128.GreaterThan(centre, first) + Vector128.LessThan(centre, second) - Vector128.GreaterThan(centre, second);
+            var offset = Vector128.ConditionalSelect(Vector128.Equals(sum, Vector128.Create(ValleySum)), valley, Vector128<short>.Zero);
+            offset = Vector128.ConditionalSelect(Vector128.Equals(sum, Vector128.Create((short)-1)), stepDown, offset);
+            offset = Vector128.ConditionalSelect(Vector128.Equals(sum, Vector128.Create((short)1)), stepUp, offset);
+            offset = Vector128.ConditionalSelect(Vector128.Equals(sum, Vector128.Create(PeakSum)), peak, offset);
+            Vector128.Min(Vector128.Max(centre + offset, Vector128<short>.Zero), maximum).CopyTo(target.Slice(index, ShortLanes));
+        }
+    }
+
+    /// <summary>Applies band offset to a run of samples, eight at a time.</summary>
+    /// <param name="block">The block.</param>
+    /// <param name="leftBand">The first of the four bands that get an offset.</param>
+    /// <param name="offsets">The four offsets.</param>
+    /// <param name="start">The index in the plane of the first sample.</param>
+    /// <param name="count">The number of samples, a multiple of eight.</param>
+    private static void BandRow(in H265SaoBlock block, int leftBand, ReadOnlySpan<int> offsets, int start, int count)
+    {
+        ReadOnlySpan<short> source = MemoryMarshal.Cast<ushort, short>(block.Source.AsSpan());
+        var target = MemoryMarshal.Cast<ushort, short>(block.Target.AsSpan());
+        var shift = block.BitDepth - BandBits;
+        var maximum = Vector128.Create((short)((1 << block.BitDepth) - 1));
+        for (var index = start; index < start + count; index += ShortLanes)
+        {
+            var value = Vector128.Create(source.Slice(index, ShortLanes));
+            var band = Vector128.ShiftRightLogical(value, shift);
+            var offset = Vector128<short>.Zero;
+            for (var k = 0; k < H265SaoParams.OffsetCount; k++)
+            {
+                offset += Vector128.Create((short)offsets[k]) & Vector128.Equals(band, Vector128.Create((short)((k + leftBand) & (Bands - 1))));
             }
+
+            Vector128.Min(Vector128.Max(value + offset, Vector128<short>.Zero), maximum).CopyTo(target.Slice(index, ShortLanes));
         }
     }
 
