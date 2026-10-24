@@ -6,6 +6,7 @@
   <Folder Name="/src/">
     <Project Path="HyperCodecs/HyperCodecs.csproj" />
     <Project Path="HyperCodecs.Platform/HyperCodecs.Platform.csproj" />
+    <Project Path="HyperCodecs.Platform.Linux/HyperCodecs.Platform.Linux.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/HyperCodecs.Tests/HyperCodecs.Tests.csproj" />

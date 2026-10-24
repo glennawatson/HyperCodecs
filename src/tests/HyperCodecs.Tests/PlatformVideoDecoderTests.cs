@@ -82,7 +82,7 @@ public sealed class PlatformVideoDecoderTests
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", file);
         using var container = MediaContainers.Open(path) ?? throw new InvalidDataException($"{file} did not open.");
         var track = container.Tracks[container.FindTrack(MediaTrackKind.Video)];
-        using var native = PlatformVideoDecoders.TryCreateNative(track, out var reason);
+        using var native = OperatingSystem.IsLinux() ? LinuxVideoDecoders.TryCreate(track, out var reason) : PlatformVideoDecoders.TryCreateNative(track, out reason);
         if (native is null)
         {
             Skip.Test($"This system has no decoder for the coding: {reason}");

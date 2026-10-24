@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
     <ProjectReference Include="..\..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
+    <ProjectReference Include="..\..\HyperCodecs.Platform.Linux\HyperCodecs.Platform.Linux.csproj" />
   </ItemGroup>
 
   <ItemGroup>

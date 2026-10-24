@@ -38,6 +38,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="HyperCodecs.Platform" />
+    <InternalsVisibleTo Include="HyperCodecs.Platform.Linux" />
     <InternalsVisibleTo Include="HyperCodecs.Tests" />
     <InternalsVisibleTo Include="HyperCodecs.Benchmarks" />
   </ItemGroup>

@@ -9,9 +9,8 @@ The package has one build for each system, and each build holds only that system
 | `net10.0-windows10.0.19041.0`, `net11.0-windows10.0.19041.0` | WASAPI | Media Foundation |
 | `net10.0-ios`, `-tvos`, `-macos`, `-maccatalyst` and the `net11.0` ones | Audio Toolbox | VideoToolbox |
 | `net10.0-android36.0`, `net11.0-android37.0` | AudioTrack | MediaCodec (hardware decoders only) |
-| `net10.0`, `net11.0` (Linux) | PulseAudio, also provided by PipeWire | VA-API |
 
-A Windows or macOS app that targets plain `net10.0` gets the Linux build, which finds nothing to use on those systems. Target the Windows or Apple framework to get the system code.
+Linux has no target framework of its own, so it is in [HyperCodecs.Platform.Linux](https://www.nuget.org/packages/HyperCodecs.Platform.Linux) (PulseAudio or PipeWire, and VA-API). The plain `net10.0` and `net11.0` builds of this package have no system code. Target the Windows, Apple or Android framework to get it.
 
 ## Use
 

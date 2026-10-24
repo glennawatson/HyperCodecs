@@ -7,11 +7,11 @@ using HyperCodecs.Platform.Audio.Linux;
 
 namespace HyperCodecs.Platform.Audio;
 
-/// <summary>Makes the PulseAudio sound output, which PipeWire also provides. The plain .NET build of the package carries this, because Linux has no platform target framework.</summary>
-internal static class SystemAudioOutputs
+/// <summary>Makes the PulseAudio sound output, which PipeWire also provides.</summary>
+public static class LinuxAudioOutputs
 {
     /// <summary>Makes the output.</summary>
     /// <returns>The output, or <see langword="null"/> when the system is not Linux.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static IStreamingAudioOutput? Create() => OperatingSystem.IsLinux() ? new PulseStreamingAudioOutput() : null;
+    public static IStreamingAudioOutput? Create() => OperatingSystem.IsLinux() ? new PulseStreamingAudioOutput() : null;
 }

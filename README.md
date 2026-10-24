@@ -49,20 +49,23 @@ Video works the same way with `VideoDecoders.Create` and a `List<VideoFrame>` fo
 
 ## Sound output and hardware video
 
-The optional `HyperCodecs.Platform` package talks to the operating system. It has one build for each system, and each build holds only that system's code. A missing library or device is reported and the managed decoders stay as the fallback.
+Two optional packages talk to the operating system. A missing library or device is reported and the managed decoders stay as the fallback.
 
 ```console
 dotnet add package HyperCodecs.Platform
+dotnet add package HyperCodecs.Platform.Linux
 ```
 
-| Target framework | Sound output (`IStreamingAudioOutput`) | Hardware video (`PlatformVideoDecoders.Create`) |
-|---|---|---|
-| `net10.0-windows10.0.19041.0`, `net11.0-windows10.0.19041.0` | WASAPI | Media Foundation |
-| `-ios`, `-tvos`, `-macos`, `-maccatalyst` | Audio Toolbox | VideoToolbox |
-| `net10.0-android36.0`, `net11.0-android37.0` | AudioTrack | MediaCodec |
-| `net10.0`, `net11.0` (Linux) | PulseAudio or PipeWire | VA-API |
+`HyperCodecs.Platform` has one build for each target framework, and each build holds only that system's code. Linux has no target framework of its own, so it has its own package.
 
-Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` uses the hardware first for large pictures and the managed decoder first for small ones. A Windows or macOS app must target the Windows or Apple framework to get its system code; plain `net10.0` gets the Linux build.
+| Package and target framework | Sound output (`IStreamingAudioOutput`) | Hardware video |
+|---|---|---|
+| `HyperCodecs.Platform` `net10.0-windows10.0.19041.0`, `net11.0-windows10.0.19041.0` | WASAPI | Media Foundation |
+| `HyperCodecs.Platform` `-ios`, `-tvos`, `-macos`, `-maccatalyst` | Audio Toolbox | VideoToolbox |
+| `HyperCodecs.Platform` `net10.0-android36.0`, `net11.0-android37.0` | AudioTrack | MediaCodec |
+| `HyperCodecs.Platform.Linux` `net10.0`, `net11.0` | PulseAudio or PipeWire (`LinuxAudioOutputs.Create`) | VA-API (`LinuxVideoDecoders.Create`) |
+
+Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` and `LinuxVideoDecoders.Create` use the hardware first for large pictures and the managed decoder first for small ones. The plain `net10.0` and `net11.0` builds of `HyperCodecs.Platform` have no system code.
 
 ## Build and test
 

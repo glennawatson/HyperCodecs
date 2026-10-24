@@ -31,5 +31,5 @@ public static class PlatformVideoDecoders
     /// <summary>Finds whether a track's pictures are big enough for the system's decoder to be the first choice.</summary>
     /// <param name="track">The picture track.</param>
     /// <returns><see langword="true"/> when they are.</returns>
-    private static bool IsLargeEnough(MediaTrack track) => (long)track.Width * track.Height >= MinimumSystemPixels;
+    internal static bool IsLargeEnough(MediaTrack track) => (long)track.Width * track.Height >= MinimumSystemPixels;
 }

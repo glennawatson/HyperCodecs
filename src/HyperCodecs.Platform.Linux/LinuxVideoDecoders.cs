@@ -6,15 +6,25 @@ using HyperCodecs.Platform.Video.VaApi;
 
 namespace HyperCodecs.Platform.Video;
 
-/// <summary>Makes the graphics hardware's decoder through VA-API. The plain .NET build of the package carries this, because Linux has no platform target framework.</summary>
-internal static class SystemVideoDecoders
+/// <summary>Makes the graphics hardware's decoder through VA-API.</summary>
+public static class LinuxVideoDecoders
 {
-    /// <summary>Makes the decoder for a track.</summary>
+    /// <summary>Makes a decoder: the hardware's when the picture is large enough to pay for it, otherwise the managed one.</summary>
+    /// <param name="track">The picture track.</param>
+    /// <returns>The decoder, or <see langword="null"/> when no decoder reads the track's coding.</returns>
+    public static VideoDecoder? Create(MediaTrack track)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        return PlatformVideoDecoders.IsLargeEnough(track) ? TryCreate(track, out _) ?? VideoDecoders.Create(track) : VideoDecoders.Create(track) ?? TryCreate(track, out _);
+    }
+
+    /// <summary>Makes the hardware decoder for a track.</summary>
     /// <param name="track">The picture track.</param>
     /// <param name="reason">Receives why there is no decoder, when there is none.</param>
     /// <returns>The decoder, or <see langword="null"/>.</returns>
-    internal static VideoDecoder? TryCreate(MediaTrack track, out string? reason)
+    public static VideoDecoder? TryCreate(MediaTrack track, out string? reason)
     {
+        ArgumentNullException.ThrowIfNull(track);
         reason = "VA-API is only used on Linux.";
         if (!OperatingSystem.IsLinux())
         {

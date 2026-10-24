@@ -82,7 +82,7 @@ public class HyperCodecsPlatformVideoDecodeBenchmarks
         }
 
         _frames = [];
-        _decoder = (System ? PlatformVideoDecoders.Create(track) : VideoDecoders.Create(track)) ?? throw new NotSupportedException("No decoder for the track.");
+        _decoder = (System ? CreateSystem(track) : VideoDecoders.Create(track)) ?? throw new NotSupportedException("No decoder for the track.");
     }
 
     /// <summary>Lets go of the decoder.</summary>
@@ -106,6 +106,11 @@ public class HyperCodecsPlatformVideoDecodeBenchmarks
         decoder.Flush(_frames!);
         return count + Recycle(decoder);
     }
+
+    /// <summary>Makes the decoder this system provides: Linux has its own package, the other systems their own target framework.</summary>
+    /// <param name="track">The picture track.</param>
+    /// <returns>The decoder, or <see langword="null"/>.</returns>
+    private static VideoDecoder? CreateSystem(MediaTrack track) => OperatingSystem.IsLinux() ? LinuxVideoDecoders.Create(track) : PlatformVideoDecoders.Create(track);
 
     /// <summary>Hands the pictures back to the decoder, as the player does once it has shown them.</summary>
     /// <param name="decoder">The decoder.</param>

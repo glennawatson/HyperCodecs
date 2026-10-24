@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>$(HyperCodecsPlatformTargetFrameworks)</TargetFrameworks>
-    <Description>Operating system sound output and hardware video decoding for HyperCodecs: WASAPI and Media Foundation on Windows, Audio Toolbox and VideoToolbox on Apple systems, AudioTrack and MediaCodec on Android, PulseAudio and VA-API on Linux. Each build holds only the code for its own system, and the managed decoders in HyperCodecs remain the fallback.</Description>
+    <Description>Operating system sound output and hardware video decoding for HyperCodecs: WASAPI and Media Foundation on Windows, Audio Toolbox and VideoToolbox on Apple systems, AudioTrack and MediaCodec on Android, and a plain build with none. Linux has its own package, HyperCodecs.Platform.Linux. Each build holds only the code for its own system, and the managed decoders in HyperCodecs remain the fallback.</Description>
     <RootNamespace>HyperCodecs.Platform</RootNamespace>
     <SystemPlatform>$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)'))</SystemPlatform>
     <SupportedOSPlatformVersion Condition="'$(SystemPlatform)' == 'ios'">15.0</SupportedOSPlatformVersion>
@@ -48,7 +48,7 @@
     <Compile Include="Platforms\common\**\*.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(SystemPlatform)' == ''">
-    <Compile Include="Platforms\linux\**\*.cs" />
+    <Compile Include="Platforms\none\**\*.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(SystemPlatform)' == 'windows'">
     <Compile Include="Platforms\windows\**\*.cs" />
@@ -65,6 +65,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="HyperCodecs.Platform.Linux" />
     <InternalsVisibleTo Include="HyperCodecs.Tests" />
     <InternalsVisibleTo Include="HyperCodecs.Benchmarks" />
   </ItemGroup>

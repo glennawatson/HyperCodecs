@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>$(LibraryTargetFrameworks)</TargetFrameworks>
+    <Description>PulseAudio (and PipeWire) sound output and VA-API hardware video decoding for HyperCodecs on Linux.</Description>
+    <RootNamespace>HyperCodecs.Platform</RootNamespace>
+  </PropertyGroup>
+
+  <!-- NuGet package. Authors, licence and repository come from Directory.Build.props; MinVer sets the version. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>HyperCodecs.Platform.Linux</PackageId>
+    <Title>HyperCodecs.Platform.Linux</Title>
+    <PackageTags>audio;video;hardware;pulseaudio;pipewire;vaapi;h264;h265;linux</PackageTags>
+    <PackageProjectUrl>https://github.com/glennawatson/HyperCodecs</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <!-- The PDB is embedded in the assembly (DebugType embedded), so there is no separate symbol package. -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <!-- Packing keeps compiler state machines so Mono hosts can load the package; see HyperCodecs.csproj. -->
+  <PropertyGroup Condition="'$(_IsPacking)' == 'true' or '$(HyperCodecsPackageBuild)' == 'true' or $(GITHUB_WORKFLOW_REF.Contains('/release.yml'))">
+    <Features>$(Features.Replace('runtime-async=on', 'runtime-async=off'))</Features>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <CoreCompileCache Include="$(Features)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../docs/hypercodecs/PLATFORM-LINUX-README.md" Pack="true" PackagePath="README.md" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HyperCodecs\HyperCodecs.csproj" />
+    <ProjectReference Include="..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="HyperCodecs.Tests" />
+    <InternalsVisibleTo Include="HyperCodecs.Benchmarks" />
+  </ItemGroup>
+</Project>
