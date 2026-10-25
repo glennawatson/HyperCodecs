@@ -10,9 +10,6 @@ internal static class H264BDirect
     /// <summary>The 8x8 partitions of a macroblock.</summary>
     private const int Groups = 4;
 
-    /// <summary>The 4x4 blocks along the side of an 8x8 partition.</summary>
-    private const int Half = 2;
-
     /// <summary>Derives and predicts all four 8x8 groups of the macroblock directly.</summary>
     /// <param name="motion">The motion of the macroblock being decoded.</param>
     /// <param name="inference">Whether direct prediction works on 8x8 blocks.</param>
