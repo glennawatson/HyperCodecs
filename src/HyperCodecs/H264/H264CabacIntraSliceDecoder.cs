@@ -10,7 +10,7 @@ namespace HyperCodecs.H264;
 
 /// <summary>Reads the macroblocks of intra slices coded with CABAC and has them reconstructed.</summary>
 [DebuggerDisplay("H264CabacIntraSliceDecoder")]
-internal sealed class H264CabacIntraSliceDecoder
+internal sealed class H264CabacIntraSliceDecoder : IH264CabacMacroblocks
 {
     /// <summary>The first context of mb_type for I slices.</summary>
     private const int MbTypeBase = 3;
@@ -170,29 +170,9 @@ internal sealed class H264CabacIntraSliceDecoder
     /// <param name="firstMb">The address of the slice's first macroblock.</param>
     /// <exception cref="InvalidDataException">The slice data is damaged.</exception>
     /// <exception cref="NotSupportedException">The slice uses a feature this decoder does not read.</exception>
-    internal void Decode(ReadOnlySpan<byte> rbsp, long dataBit, int firstMb)
-    {
-        H264CabacContexts.Initialize(_contexts, true, 0, _qp);
-        var engine = new CabacEngine(rbsp, (dataBit + H264Layout.SampleBits - 1) / H264Layout.SampleBits * H264Layout.SampleBits, _contexts);
-        var total = _picture.MbWidth * _picture.MbHeight;
-        var address = firstMb;
-        do
-        {
-            if (address >= total)
-            {
-                throw new InvalidDataException("An H.264 slice has more macroblocks than the picture.");
-            }
-
-            DecodeMacroblock(ref engine, rbsp, address);
-            H264Deblocking.MacroblockDecoded(_picture, address);
-            address++;
-        }
-        while (engine.DecodeTerminate() == 0 && !engine.IsOverrun);
-        if (engine.IsOverrun)
-        {
-            throw new InvalidDataException("An H.264 slice is cut short.");
-        }
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Decode(ReadOnlySpan<byte> rbsp, long dataBit, int firstMb) =>
+        H264CabacSliceLoop.Run(this, _picture, new(_contexts, true, 0, _qp), rbsp, dataBit, firstMb);
 
     /// <summary>Reads and reconstructs an intra macroblock of a P or B slice, after the slice's mb_type prefix said the macroblock is intra.</summary>
     /// <param name="engine">The arithmetic decoder.</param>
@@ -282,7 +262,7 @@ internal sealed class H264CabacIntraSliceDecoder
     /// <param name="engine">The arithmetic decoder.</param>
     /// <param name="rbsp">The slice's payload, for macroblocks of raw samples.</param>
     /// <param name="address">The macroblock's address.</param>
-    private void DecodeMacroblock(ref CabacEngine engine, ReadOnlySpan<byte> rbsp, int address)
+    void IH264CabacMacroblocks.DecodeMacroblock(ref CabacEngine engine, ReadOnlySpan<byte> rbsp, int address)
     {
         BeginMacroblock(address);
         var left = H264CabacNeighbours.Left(_picture, _mb, _slice);

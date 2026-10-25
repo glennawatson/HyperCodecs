@@ -28,9 +28,6 @@ internal static class H265ResidualReader
     /// <summary>The smallest block side of the transform blocks that may use the mode dependent scans.</summary>
     private const int ScanLog2Max = 3;
 
-    /// <summary>The number of coefficients in a sub-block.</summary>
-    private const int SubBlockCoefficients = 16;
-
     /// <summary>The base 2 logarithm of the side of a sub-block, which is also the smallest transform block.</summary>
     private const int SubBlockLog2 = 2;
 

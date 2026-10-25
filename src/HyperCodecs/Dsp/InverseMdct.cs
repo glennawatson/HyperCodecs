@@ -18,9 +18,6 @@ internal sealed class InverseMdct
     /// <summary>A quarter, the offset of the post twiddle.</summary>
     private const double Quarter = 0.25;
 
-    /// <summary>A full turn in radians.</summary>
-    private const double Turn = 2 * Math.PI;
-
     /// <summary>The real parts of the values being transformed.</summary>
     private readonly float[] _real;
 

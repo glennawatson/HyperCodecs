@@ -19,9 +19,6 @@ internal static class Mp3Hybrid
     /// <summary>The subbands at the bottom of a mixed block that use the long transform.</summary>
     private const int MixedLongSubbands = 2;
 
-    /// <summary>The values a long transform produces for a subband.</summary>
-    private const int LongOutputs = 36;
-
     /// <summary>The samples of the overlap kept for the next granule.</summary>
     private const int Overlap = Mp3Tables.SubbandSamples;
 

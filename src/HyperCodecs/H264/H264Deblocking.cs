@@ -34,17 +34,11 @@ internal static class H264Deblocking
     /// <summary>The disable_deblocking_filter_idc value that filters everything but the edges between slices.</summary>
     private const int FilterInsideSlices = 2;
 
-    /// <summary>The bits of the four 4x4 blocks of an 8x8 block in a coefficient mask, when the block's first bit is bit 0.</summary>
-    private const int EightByEightBits = 0x33;
-
     /// <summary>The boundary strength of an edge between macroblocks when one side is intra coded.</summary>
     private const int IntraMacroblockEdge = 4;
 
     /// <summary>The boundary strength of an edge inside a macroblock that is intra coded.</summary>
     private const int IntraEdge = 3;
-
-    /// <summary>The boundary strength when a side has coefficients.</summary>
-    private const int CoefficientEdge = 2;
 
     /// <summary>The largest sample value.</summary>
     private const int MaxSample = 255;

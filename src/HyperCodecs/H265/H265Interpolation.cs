@@ -2,7 +2,9 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 
 namespace HyperCodecs.H265;
@@ -245,7 +247,10 @@ internal static class H265Interpolation
         }
     }
 
-    /// <summary>Filters along columns of the work area (samples) or of the intermediate rows.</summary>
+    /// <summary>
+    /// Filters along columns, either of the work area (unsigned samples) or of the intermediate rows produced by the horizontal stage (signed values).
+    /// </summary>
+    /// <typeparam name="TSample">The sample type, <see cref="ushort"/> for the work area or <see cref="short"/> for the intermediate rows.</typeparam>
     /// <param name="source">The samples, starting at the first sample of the first column to filter.</param>
     /// <param name="stride">The row length of the source.</param>
     /// <param name="taps">The filter taps.</param>
@@ -253,7 +258,8 @@ internal static class H265Interpolation
     /// <param name="width">The block width.</param>
     /// <param name="height">The block height.</param>
     /// <param name="shift">The right shift.</param>
-    private static void FilterColumns(ReadOnlySpan<ushort> source, int stride, ReadOnlySpan<sbyte> taps, Span<short> destination, int width, int height, int shift)
+    private static void FilterColumns<TSample>(ReadOnlySpan<TSample> source, int stride, ReadOnlySpan<sbyte> taps, Span<short> destination, int width, int height, int shift)
+        where TSample : unmanaged, IBinaryInteger<TSample>
     {
         for (var y = 0; y < height; y++)
         {
@@ -265,7 +271,7 @@ internal static class H265Interpolation
                     var sum = Vector128<int>.Zero;
                     for (var k = 0; k < taps.Length; k++)
                     {
-                        sum += Vector128.Create((int)taps[k]) * Widen(source, ((y + k) * stride) + x);
+                        sum += Vector128.Create((int)taps[k]) * WidenSamples(source, ((y + k) * stride) + x);
                     }
 
                     Store(Vector128.ShiftRightArithmetic(sum, shift), destination, (y * width) + x);
@@ -277,7 +283,7 @@ internal static class H265Interpolation
                 var sum = 0;
                 for (var k = 0; k < taps.Length; k++)
                 {
-                    sum += taps[k] * source[((y + k) * stride) + x];
+                    sum += taps[k] * int.CreateTruncating(source[((y + k) * stride) + x]);
                 }
 
                 destination[(y * width) + x] = (short)(sum >> shift);
@@ -285,45 +291,17 @@ internal static class H265Interpolation
         }
     }
 
-    /// <summary>Filters along columns of the intermediate rows produced by the horizontal stage.</summary>
-    /// <param name="source">The intermediate rows, starting with the margin above the block.</param>
-    /// <param name="stride">The row length of the source.</param>
-    /// <param name="taps">The filter taps.</param>
-    /// <param name="destination">Receives the filtered samples.</param>
-    /// <param name="width">The block width.</param>
-    /// <param name="height">The block height.</param>
-    /// <param name="shift">The right shift.</param>
-    private static void FilterColumns(ReadOnlySpan<short> source, int stride, ReadOnlySpan<sbyte> taps, Span<short> destination, int width, int height, int shift)
-    {
-        for (var y = 0; y < height; y++)
-        {
-            var x = 0;
-            if (Vector128.IsHardwareAccelerated)
-            {
-                for (; x + Lanes <= width; x += Lanes)
-                {
-                    var sum = Vector128<int>.Zero;
-                    for (var k = 0; k < taps.Length; k++)
-                    {
-                        sum += Vector128.Create((int)taps[k]) * Widen(source, ((y + k) * stride) + x);
-                    }
-
-                    Store(Vector128.ShiftRightArithmetic(sum, shift), destination, (y * width) + x);
-                }
-            }
-
-            for (; x < width; x++)
-            {
-                var sum = 0;
-                for (var k = 0; k < taps.Length; k++)
-                {
-                    sum += taps[k] * source[((y + k) * stride) + x];
-                }
-
-                destination[(y * width) + x] = (short)(sum >> shift);
-            }
-        }
-    }
+    /// <summary>Loads four samples of either type as 32 bit values.</summary>
+    /// <typeparam name="TSample">The sample type, <see cref="ushort"/> or <see cref="short"/>.</typeparam>
+    /// <param name="samples">The samples.</param>
+    /// <param name="index">The index of the first of the four.</param>
+    /// <returns>The values.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<int> WidenSamples<TSample>(ReadOnlySpan<TSample> samples, int index)
+        where TSample : unmanaged =>
+        typeof(TSample) == typeof(ushort)
+            ? Widen(MemoryMarshal.Cast<TSample, ushort>(samples), index)
+            : Widen(MemoryMarshal.Cast<TSample, short>(samples), index);
 
     /// <summary>Loads four unsigned samples as 32 bit values.</summary>
     /// <param name="samples">The samples.</param>

@@ -21,9 +21,6 @@ internal static class Mp3Scalefactors
     /// <summary>The scale factors of a mixed block in MPEG 1: eight long bands and nine short band entries.</summary>
     private const int MixedCount = 35;
 
-    /// <summary>The scale factors that use the first size in a long block.</summary>
-    private const int LongFirstSize = 11;
-
     /// <summary>The scale factors that use the first size in a block of short windows.</summary>
     private const int ShortFirstSize = 18;
 

@@ -78,9 +78,7 @@ internal static class H265WeightedPrediction
     /// <param name="bitDepth">The bit depth.</param>
     private static void WriteSingle(ReadOnlySpan<short> source, BlockRect area, H265PredictionTarget target, int bitDepth)
     {
-        var shift = Math.Max(MinSingleShift, IntermediateBits - bitDepth);
-        var offset = 1 << (shift - 1);
-        var maximum = (1 << bitDepth) - 1;
+        var (shift, offset, maximum) = H265OutputRounding.Create(Math.Max(MinSingleShift, IntermediateBits - bitDepth), bitDepth);
         for (var y = 0; y < area.Height; y++)
         {
             var row = target.Offset + (y * target.Stride);
@@ -118,9 +116,7 @@ internal static class H265WeightedPrediction
     /// <param name="bitDepth">The bit depth.</param>
     private static void WriteAverage(ReadOnlySpan<short> first, ReadOnlySpan<short> second, BlockRect area, H265PredictionTarget target, int bitDepth)
     {
-        var shift = Math.Max(MinAverageShift, IntermediateBits + 1 - bitDepth);
-        var offset = 1 << (shift - 1);
-        var maximum = (1 << bitDepth) - 1;
+        var (shift, offset, maximum) = H265OutputRounding.Create(Math.Max(MinAverageShift, IntermediateBits + 1 - bitDepth), bitDepth);
         for (var y = 0; y < area.Height; y++)
         {
             var row = target.Offset + (y * target.Stride);

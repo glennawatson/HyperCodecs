@@ -9,7 +9,7 @@ namespace HyperCodecs.H264;
 
 /// <summary>Reads the macroblocks of P slices coded with CABAC and has them reconstructed.</summary>
 [DebuggerDisplay("H264CabacPSliceDecoder")]
-internal sealed class H264CabacPSliceDecoder
+internal sealed class H264CabacPSliceDecoder : IH264CabacMacroblocks
 {
     /// <summary>The 4x4 blocks along a macroblock side.</summary>
     private const int Side = 4;
@@ -23,20 +23,8 @@ internal sealed class H264CabacPSliceDecoder
     /// <summary>The 8x8 partitions of a macroblock.</summary>
     private const int Groups = 4;
 
-    /// <summary>The sub_mb_type of a sub-macroblock split in two along its width.</summary>
-    private const int Sub8x4 = 1;
-
-    /// <summary>The sub_mb_type of a sub-macroblock split in two along its height.</summary>
-    private const int Sub4x8 = 2;
-
-    /// <summary>The sub_mb_type of a sub-macroblock split into four 4x4 blocks.</summary>
-    private const int Sub4x4 = 3;
-
     /// <summary>The first context of the rest of mb_type for an intra macroblock in a P slice.</summary>
     private const int PIntraBase = 17;
-
-    /// <summary>The largest size of a motion vector difference kept for the contexts.</summary>
-    private const int MaxStoredMvd = 255;
 
     /// <summary>Predicts the samples of inter blocks.</summary>
     private readonly H264InterPredictor _predictor;
@@ -109,78 +97,15 @@ internal sealed class H264CabacPSliceDecoder
     /// <param name="firstMb">The address of the slice's first macroblock.</param>
     /// <exception cref="InvalidDataException">The slice data is damaged.</exception>
     /// <exception cref="NotSupportedException">The slice uses a feature this decoder does not read.</exception>
-    internal void Decode(ReadOnlySpan<byte> rbsp, long dataBit, int firstMb)
-    {
-        H264CabacContexts.Initialize(_contexts, false, _initIdc, _startQp);
-        var engine = new CabacEngine(rbsp, (dataBit + H264Layout.SampleBits - 1) / H264Layout.SampleBits * H264Layout.SampleBits, _contexts);
-        var total = _picture.MbWidth * _picture.MbHeight;
-        var address = firstMb;
-        do
-        {
-            if (address >= total)
-            {
-                throw new InvalidDataException("An H.264 slice has more macroblocks than the picture.");
-            }
-
-            DecodeMacroblock(ref engine, rbsp, address);
-            H264Deblocking.MacroblockDecoded(_picture, address);
-            address++;
-        }
-        while (engine.DecodeTerminate() == 0 && !engine.IsOverrun);
-        if (engine.IsOverrun)
-        {
-            throw new InvalidDataException("An H.264 slice is cut short.");
-        }
-    }
-
-    /// <summary>Gets the position of a sub-partition inside its 8x8 partition, in 4x4 blocks.</summary>
-    /// <param name="subType">The sub_mb_type.</param>
-    /// <param name="index">The sub-partition's number.</param>
-    /// <returns>The sub-partition.</returns>
-    private static H264Partition SubPartition(int subType, int index) => subType switch
-    {
-        Sub8x4 => new(0, index, Half, 1, H264MotionPrediction.Plain),
-        Sub4x8 => new(index, 0, 1, Half, H264MotionPrediction.Plain),
-        Sub4x4 => new(index & 1, index >> 1, 1, 1, H264MotionPrediction.Plain),
-        _ => new(0, 0, Half, Half, H264MotionPrediction.Plain),
-    };
-
-    /// <summary>Gets how many sub-partitions a sub_mb_type has.</summary>
-    /// <param name="subType">The sub_mb_type.</param>
-    /// <returns>1, 2 or 4.</returns>
-    private static int SubPartitionCount(int subType) => subType switch
-    {
-        Sub8x4 or Sub4x8 => TwoPartitions,
-        Sub4x4 => Groups,
-        _ => 1,
-    };
-
-    /// <summary>Gets a partition of a 16x16, 16x8 or 8x16 macroblock.</summary>
-    /// <param name="type">The mb_type, 0 to 2.</param>
-    /// <param name="index">The partition's number.</param>
-    /// <returns>The partition.</returns>
-    private static H264Partition PartitionOf(int type, int index)
-    {
-        if (type == H264CabacInter.Type16x16)
-        {
-            return new(0, 0, Side, Side, H264MotionPrediction.Plain);
-        }
-
-        if (type == H264CabacInter.Type16x8)
-        {
-            var shape = index == 0 ? H264MotionPrediction.Upper16x8 : H264MotionPrediction.Lower16x8;
-            return new(0, index * Half, Side, Half, shape);
-        }
-
-        var side = index == 0 ? H264MotionPrediction.Left8x16 : H264MotionPrediction.Right8x16;
-        return new(index * Half, 0, Half, Side, side);
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Decode(ReadOnlySpan<byte> rbsp, long dataBit, int firstMb) =>
+        H264CabacSliceLoop.Run(this, _picture, new(_contexts, false, _initIdc, _startQp), rbsp, dataBit, firstMb);
 
     /// <summary>Reads and reconstructs one macroblock.</summary>
     /// <param name="engine">The arithmetic decoder.</param>
     /// <param name="rbsp">The slice's payload, for macroblocks of raw samples.</param>
     /// <param name="address">The macroblock's address.</param>
-    private void DecodeMacroblock(ref CabacEngine engine, ReadOnlySpan<byte> rbsp, int address)
+    void IH264CabacMacroblocks.DecodeMacroblock(ref CabacEngine engine, ReadOnlySpan<byte> rbsp, int address)
     {
         BeginInter(address);
         var left = H264CabacNeighbours.Left(_picture, _mb, _slice);
@@ -218,21 +143,7 @@ internal sealed class H264CabacPSliceDecoder
     /// <param name="address">The macroblock's address.</param>
     private void BeginInter(int address)
     {
-        var mb = _mb;
-        mb.Address = address;
-        mb.X = address % _picture.MbWidth;
-        mb.Y = address / _picture.MbWidth;
-        mb.Kind = H264MbKind.Inter;
-        mb.CbpLuma = 0;
-        mb.CbpChroma = 0;
-        mb.ClearCoefficients();
-        _picture.SliceOfMb[address] = _slice;
-        _picture.Kinds[address] = H264MbKind.Inter;
-        Array.Clear(_picture.Counts, address * H264Picture.CountsPerMb, H264Picture.CountsPerMb);
-        _picture.ClearMotion(address);
-        _picture.Cbp[address] = 0;
-        _picture.ChromaModes[address] = 0;
-        _picture.DcFlags[address] = 0;
+        H264InterMacroblock.BeginCabac(_mb, _picture, _slice, address);
         _allow8x8 = true;
         _motion.Begin();
     }
@@ -242,7 +153,7 @@ internal sealed class H264CabacPSliceDecoder
     private void SkipMacroblock(int address)
     {
         _picture.Skipped[address] = true;
-        var whole = new H264Partition(0, 0, Side, Side, H264MotionPrediction.Plain);
+        var whole = H264PartitionGeometry.Macroblock(H264BTypes.Shape16x16, 0);
         var vector = _motion.Skip();
         SetMotion(whole, 0, vector, default);
         Compensate(whole, 0, vector);
@@ -259,14 +170,14 @@ internal sealed class H264CabacPSliceDecoder
         Span<int> refIdx = stackalloc int[TwoPartitions];
         for (var index = 0; index < count; index++)
         {
-            var partition = PartitionOf(type, index);
+            var partition = H264PartitionGeometry.Macroblock(type, index);
             refIdx[index] = ReadRefIdx(ref engine, partition);
             StoreRefIdx(partition, refIdx[index]);
         }
 
         for (var index = 0; index < count; index++)
         {
-            ReadVector(ref engine, PartitionOf(type, index), refIdx[index]);
+            ReadVector(ref engine, H264PartitionGeometry.Macroblock(type, index), refIdx[index]);
         }
     }
 
@@ -284,17 +195,16 @@ internal sealed class H264CabacPSliceDecoder
 
         for (var group = 0; group < Groups; group++)
         {
-            var whole = new H264Partition((group & 1) * Half, (group >> 1) * Half, Half, Half, H264MotionPrediction.Plain);
+            var whole = H264PartitionGeometry.Group(group);
             refIdx[group] = ReadRefIdx(ref engine, whole);
             StoreRefIdx(whole, refIdx[group]);
         }
 
         for (var group = 0; group < Groups; group++)
         {
-            for (var part = 0; part < SubPartitionCount(subTypes[group]); part++)
+            for (var part = 0; part < H264PartitionGeometry.SubPartitionCount(subTypes[group]); part++)
             {
-                var sub = SubPartition(subTypes[group], part);
-                ReadVector(ref engine, sub with { Column = ((group & 1) * Half) + sub.Column, Row = ((group >> 1) * Half) + sub.Row }, refIdx[group]);
+                ReadVector(ref engine, H264PartitionGeometry.InGroup(group, subTypes[group], part), refIdx[group]);
             }
         }
     }
@@ -380,22 +290,8 @@ internal sealed class H264CabacPSliceDecoder
     /// <param name="difference">The motion vector difference that was read.</param>
     private void SetMotion(H264Partition partition, int refIdx, MotionVector vector, MotionVector difference)
     {
-        var address = _mb.Address;
-        for (var r = partition.Row; r < partition.Row + partition.Height; r++)
-        {
-            for (var c = partition.Column; c < partition.Column + partition.Width; c++)
-            {
-                var index = (address * H264Picture.BlocksPerMb) + (r * Side) + c;
-                _picture.MvX[index] = (short)vector.X;
-                _picture.MvY[index] = (short)vector.Y;
-                _picture.MvdX[index] = (byte)Math.Min(Math.Abs(difference.X), MaxStoredMvd);
-                _picture.MvdY[index] = (byte)Math.Min(Math.Abs(difference.Y), MaxStoredMvd);
-                var group = (address * H264Picture.GroupsPerMb) + ((r >> 1) * Half) + (c >> 1);
-                _picture.RefIdx[group] = (sbyte)refIdx;
-                _picture.RefUid[group] = _refs[refIdx].Picture.Uid;
-            }
-        }
-
+        H264PMotionStore.Store(_picture, _mb.Address, partition, refIdx, _refs[refIdx].Picture.Uid, vector);
+        H264PMotionStore.StoreDifference(_picture, _mb.Address, partition, difference);
         _motion.MarkDecoded(partition);
     }
 

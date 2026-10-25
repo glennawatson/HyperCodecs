@@ -231,7 +231,7 @@ internal sealed class FlacContainer : MediaContainer
         }
         while (!last);
 
-        return info is null || configuration is null ? null : new(stream, info, configuration, points, stream.Position);
+        return configuration is null || info is null ? null : new(stream, info, configuration, points, stream.Position);
     }
 
     /// <summary>Reads one metadata block.</summary>

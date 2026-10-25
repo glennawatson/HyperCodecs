@@ -28,17 +28,11 @@ internal static class H264IntraChroma
     /// <summary>The prediction of a block with no neighbours.</summary>
     private const int Mid = 128;
 
-    /// <summary>The largest sample value.</summary>
-    private const int MaxSample = 255;
-
     /// <summary>The 4x4 blocks along each side of the chroma block.</summary>
     private const int Quads = 2;
 
     /// <summary>The shift of the mean of eight neighbours.</summary>
     private const int BothShift = 3;
-
-    /// <summary>The shift of the plane prediction.</summary>
-    private const int PlaneFinalShift = 5;
 
     /// <summary>The rounding of the mean of four neighbours.</summary>
     private const int OneRound = 2;
@@ -46,23 +40,8 @@ internal static class H264IntraChroma
     /// <summary>The shift of the mean of four neighbours.</summary>
     private const int OneShift = 2;
 
-    /// <summary>The distance from the last gradient sample to the first one used on the near side.</summary>
-    private const int Back = 2;
-
     /// <summary>The multiplier of the plane gradients for 4:2:0 video.</summary>
     private const int PlaneScale = 34;
-
-    /// <summary>The rounding of the plane gradients.</summary>
-    private const int PlaneRound = 32;
-
-    /// <summary>The shift of the plane gradients.</summary>
-    private const int PlaneShift = 6;
-
-    /// <summary>The multiplier of the corner samples, and the rounding of the plane prediction.</summary>
-    private const int PlaneCorner = 16;
-
-    /// <summary>The distance from the corner of the block to its centre, for the plane prediction.</summary>
-    private const int Center = 3;
 
     /// <summary>Predicts a chroma block into the picture.</summary>
     /// <param name="plane">The chroma plane.</param>
@@ -76,21 +55,13 @@ internal static class H264IntraChroma
         {
             case Vertical:
             {
-                for (var y = 0; y < Size; y++)
-                {
-                    Array.Copy(plane, offset - stride, plane, offset + (y * stride), Size);
-                }
-
+                H264IntraBlocks.CopyAbove(plane, offset, stride, Size);
                 break;
             }
 
             case Horizontal:
             {
-                for (var y = 0; y < Size; y++)
-                {
-                    plane.AsSpan(offset + (y * stride), Size).Fill(plane[offset + (y * stride) - 1]);
-                }
-
+                H264IntraBlocks.ReplicateLeft(plane, offset, stride, Size);
                 break;
             }
 
@@ -102,7 +73,7 @@ internal static class H264IntraChroma
 
             default:
             {
-                PredictPlane(plane, offset, stride);
+                H264IntraBlocks.PredictPlane(plane, offset, stride, Size, PlaneScale);
                 break;
             }
         }
@@ -181,36 +152,5 @@ internal static class H264IntraChroma
         }
 
         return otherAvailable ? (other + OneRound) >> OneShift : Mid;
-    }
-
-    /// <summary>Predicts with the plane mode.</summary>
-    /// <param name="plane">The chroma plane.</param>
-    /// <param name="offset">The index of the block's first sample.</param>
-    /// <param name="stride">The bytes in a row.</param>
-    private static void PredictPlane(byte[] plane, int offset, int stride)
-    {
-        var horizontal = 0;
-        var vertical = 0;
-        for (var index = 0; index < Half; index++)
-        {
-            var right = plane[offset - stride + Half + index];
-            var leftTop = index == Half - 1 ? plane[offset - stride - 1] : plane[offset - stride + Half - Back - index];
-            var bottom = plane[offset + ((Half + index) * stride) - 1];
-            var upper = index == Half - 1 ? plane[offset - stride - 1] : plane[offset + ((Half - Back - index) * stride) - 1];
-            horizontal += (index + 1) * (right - leftTop);
-            vertical += (index + 1) * (bottom - upper);
-        }
-
-        var a = PlaneCorner * (plane[offset + ((Size - 1) * stride) - 1] + plane[offset - stride + Size - 1]);
-        var b = ((PlaneScale * horizontal) + PlaneRound) >> PlaneShift;
-        var c = ((PlaneScale * vertical) + PlaneRound) >> PlaneShift;
-        for (var y = 0; y < Size; y++)
-        {
-            for (var x = 0; x < Size; x++)
-            {
-                var value = (a + (b * (x - Center)) + (c * (y - Center)) + PlaneCorner) >> PlaneFinalShift;
-                plane[offset + (y * stride) + x] = (byte)Math.Clamp(value, 0, MaxSample);
-            }
-        }
     }
 }

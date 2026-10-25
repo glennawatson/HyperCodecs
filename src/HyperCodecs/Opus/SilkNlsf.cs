@@ -76,9 +76,6 @@ internal static class SilkNlsf
     /// <summary>The bits the residual is shifted up by before it is divided by the root of the weight.</summary>
     private const int WeightDivideShift = 14;
 
-    /// <summary>The unsigned byte range one past its maximum.</summary>
-    private const int BytePairs = 2;
-
     /// <summary>The mask of the three bits of a second stage selection that pick a distribution.</summary>
     private const int SelectMask = 7;
 

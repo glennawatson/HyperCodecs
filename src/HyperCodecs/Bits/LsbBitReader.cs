@@ -54,21 +54,17 @@ public ref struct LsbBitReader
     public LsbBitReader(ReadOnlySpan<byte> data)
     {
         _data = data;
-        _next = 0;
-        _window = 0;
-        _count = 0;
-        _virtual = 0;
         Refill();
     }
 
     /// <summary>Gets the number of bits read so far.</summary>
-    public readonly long BitPosition => ((long)_next * ByteBits) + _virtual - _count;
+    public readonly long BitPosition => BitReaderPosition.Read(_next, _virtual, _count);
 
     /// <summary>Gets the number of bits left in the data.</summary>
-    public readonly long BitsLeft => ((long)_data.Length * ByteBits) - BitPosition;
+    public readonly long BitsLeft => BitReaderPosition.Left(_data.Length, BitPosition);
 
     /// <summary>Gets a value indicating whether more bits were read than the data holds.</summary>
-    public readonly bool IsOverrun => BitPosition > (long)_data.Length * ByteBits;
+    public readonly bool IsOverrun => BitsLeft < 0;
 
     /// <summary>Looks at the next bits without reading them.</summary>
     /// <param name="count">The number of bits, from 0 to 32.</param>

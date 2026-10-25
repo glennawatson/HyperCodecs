@@ -28,29 +28,14 @@ internal static class H264Intra16x16
     /// <summary>Half the size of the block.</summary>
     private const int Half = 8;
 
-    /// <summary>The largest sample value.</summary>
-    private const int MaxSample = 255;
-
-    /// <summary>The shift of the mean of 32 neighbours, and of the plane prediction.</summary>
+    /// <summary>The shift of the mean of 32 neighbours.</summary>
     private const int BothShift = 5;
 
     /// <summary>The shift of the mean of 16 neighbours.</summary>
     private const int OneShift = 4;
 
-    /// <summary>The distance from the last gradient sample to the first one used on the near side.</summary>
-    private const int Back = 2;
-
     /// <summary>The multiplier of the plane gradients.</summary>
     private const int PlaneScale = 5;
-
-    /// <summary>The rounding of the plane gradients.</summary>
-    private const int PlaneRound = 32;
-
-    /// <summary>The shift of the plane gradients.</summary>
-    private const int PlaneShift = 6;
-
-    /// <summary>The distance from the corner of the block to its centre, for the plane prediction.</summary>
-    private const int Center = 7;
 
     /// <summary>Predicts a 16x16 block into the picture.</summary>
     /// <param name="plane">The luma plane.</param>
@@ -64,21 +49,13 @@ internal static class H264Intra16x16
         {
             case Vertical:
             {
-                for (var y = 0; y < Size; y++)
-                {
-                    Array.Copy(plane, offset - stride, plane, offset + (y * stride), Size);
-                }
-
+                H264IntraBlocks.CopyAbove(plane, offset, stride, Size);
                 break;
             }
 
             case Horizontal:
             {
-                for (var y = 0; y < Size; y++)
-                {
-                    plane.AsSpan(offset + (y * stride), Size).Fill(plane[offset + (y * stride) - 1]);
-                }
-
+                H264IntraBlocks.ReplicateLeft(plane, offset, stride, Size);
                 break;
             }
 
@@ -95,7 +72,7 @@ internal static class H264Intra16x16
 
             default:
             {
-                PlanePredict(plane, offset, stride);
+                H264IntraBlocks.PredictPlane(plane, offset, stride, Size, PlaneScale);
                 break;
             }
         }
@@ -128,36 +105,5 @@ internal static class H264Intra16x16
         }
 
         return neighbours.Top ? (top + Half) >> OneShift : Mid;
-    }
-
-    /// <summary>Predicts with the plane mode.</summary>
-    /// <param name="plane">The luma plane.</param>
-    /// <param name="offset">The index of the block's first sample.</param>
-    /// <param name="stride">The bytes in a row.</param>
-    private static void PlanePredict(byte[] plane, int offset, int stride)
-    {
-        var horizontal = 0;
-        var vertical = 0;
-        for (var index = 0; index < Half; index++)
-        {
-            var topRight = plane[offset - stride + Half + index];
-            var topLeft = index == Half - 1 ? plane[offset - stride - 1] : plane[offset - stride + Half - Back - index];
-            var bottom = plane[offset + ((Half + index) * stride) - 1];
-            var upper = index == Half - 1 ? plane[offset - stride - 1] : plane[offset + ((Half - Back - index) * stride) - 1];
-            horizontal += (index + 1) * (topRight - topLeft);
-            vertical += (index + 1) * (bottom - upper);
-        }
-
-        var a = Size * (plane[offset + ((Size - 1) * stride) - 1] + plane[offset - stride + Size - 1]);
-        var b = ((PlaneScale * horizontal) + PlaneRound) >> PlaneShift;
-        var c = ((PlaneScale * vertical) + PlaneRound) >> PlaneShift;
-        for (var y = 0; y < Size; y++)
-        {
-            for (var x = 0; x < Size; x++)
-            {
-                var value = (a + (b * (x - Center)) + (c * (y - Center)) + Size) >> BothShift;
-                plane[offset + (y * stride) + x] = (byte)Math.Clamp(value, 0, MaxSample);
-            }
-        }
     }
 }

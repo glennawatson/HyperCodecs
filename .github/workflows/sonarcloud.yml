@@ -54,7 +54,8 @@ jobs:
           version: ${{ steps.environment.outputs.version-semver2 }}
           exclusions: '**/tests/**,**/benchmarks/**'
           coverage-exclusions: '**/tests/**,**/benchmarks/**'
-          cpd-exclusions: '**/tests/**,**/benchmarks/**'
+          # H265CabacInitValues holds the three initialisation tables of the specification, which share their layout by design.
+          cpd-exclusions: '**/tests/**,**/benchmarks/**,**/H265CabacInitValues.cs'
           test-exclusions: '**/tests/**,**/benchmarks/**'
           working-directory: src
 

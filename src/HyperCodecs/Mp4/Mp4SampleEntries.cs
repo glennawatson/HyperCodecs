@@ -10,9 +10,6 @@ namespace HyperCodecs.Mp4;
 /// <summary>Reads the first sample entry of a track's sample description and turns it into a <see cref="MediaTrack"/>.</summary>
 internal static class Mp4SampleEntries
 {
-    /// <summary>The bytes of a sample entry before its audio fields: reserved bytes and the data reference index.</summary>
-    private const int EntryLead = 8;
-
     /// <summary>The offset of the version in an audio sample entry.</summary>
     private const int AudioVersionAt = 8;
 
