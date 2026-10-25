@@ -91,6 +91,8 @@
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <PackageReference Include="TUnit" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <!-- Writes a dump when the test host crashes; it only runs when the crashdump option is passed to the test run. -->
+    <PackageReference Include="Microsoft.Testing.Extensions.CrashDump" />
     <None Include="$(MSBuildThisFileDirectory)testconfig.json">
       <Link>$(AssemblyName).testconfig.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
