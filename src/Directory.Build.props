@@ -11,9 +11,10 @@
     <HyperCodecsAndroidTargets>net10.0-android36.0;net11.0-android37</HyperCodecsAndroidTargets>
     <HyperCodecsPlatformTargetFrameworks>$(LibraryTargetFrameworks);$(HyperCodecsWindowsTargets)</HyperCodecsPlatformTargetFrameworks>
 
-    <!-- The Android SDK installer and build tools do not run on Linux arm64, so the Android targets build on every other host. -->
-    <HyperCodecsLinuxArm64Host Condition="$([MSBuild]::IsOsPlatform('Linux')) and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">true</HyperCodecsLinuxArm64Host>
-    <HyperCodecsPlatformTargetFrameworks Condition="'$(HyperCodecsLinuxArm64Host)' != 'true'">$(HyperCodecsPlatformTargetFrameworks);$(HyperCodecsAndroidTargets)</HyperCodecsPlatformTargetFrameworks>
+    <!-- The Android SDK is not available on the Linux and Windows arm64 hosts (Linux arm64 cannot run its installer), so the Android targets build on every other host. -->
+    <HyperCodecsAndroidHost>true</HyperCodecsAndroidHost>
+    <HyperCodecsAndroidHost Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64' and !$([MSBuild]::IsOsPlatform('OSX'))">false</HyperCodecsAndroidHost>
+    <HyperCodecsPlatformTargetFrameworks Condition="'$(HyperCodecsAndroidHost)' == 'true'">$(HyperCodecsPlatformTargetFrameworks);$(HyperCodecsAndroidTargets)</HyperCodecsPlatformTargetFrameworks>
     <HyperCodecsPlatformTargetFrameworks Condition="$([MSBuild]::IsOsPlatform('Windows')) or $([MSBuild]::IsOsPlatform('OSX'))">$(HyperCodecsPlatformTargetFrameworks);$(HyperCodecsAppleTargets)</HyperCodecsPlatformTargetFrameworks>
 
     <!-- Lets Linux and macOS build the net*-windows targets. -->

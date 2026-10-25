@@ -56,27 +56,14 @@ jobs:
           dotnet-versions: |
             11.x
             10.x
-      - name: Setup Java for the Android SDK
-        if: matrix.name == 'Windows arm64'
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - name: Build
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@315788024be8e61daa4f2b957e6476746211b522 # main
         with:
-          distribution: temurin
-          java-version: '21'
-      - name: Install the Android SDK (the Windows arm64 runner does not have it)
-        if: matrix.name == 'Windows arm64'
-        working-directory: src
-        env:
-          AndroidSdkDirectory: ${{ runner.temp }}/android-sdk
-        run: |
-          dotnet build HyperCodecs.Platform/HyperCodecs.Platform.csproj -t:InstallAndroidDependencies -f net10.0-android36.0 -p:AcceptAndroidSDKLicenses=True -v q --nologo
-          dotnet build HyperCodecs.Platform/HyperCodecs.Platform.csproj -t:InstallAndroidDependencies -f net11.0-android37 -p:AcceptAndroidSDKLicenses=True -v q --nologo
-      - name: Test on net10.0 and net11.0 (with the installed Android SDK)
-        if: matrix.name == 'Windows arm64'
-        working-directory: src
-        env:
-          AndroidSdkDirectory: ${{ runner.temp }}/android-sdk
-        run: dotnet test --project ${{ github.workspace }}/src/tests/HyperCodecs.Tests/HyperCodecs.Tests.csproj -c Release -v q --nologo
-      - name: Test on net10.0 and net11.0
-        if: matrix.name != 'Windows arm64'
-        working-directory: src
-        run: dotnet test --project ${{ github.workspace }}/src/tests/HyperCodecs.Tests/HyperCodecs.Tests.csproj -c Release -v q --nologo
+          solution-file: HyperCodecs.slnx
+      - name: Test
+        uses: glennawatson/actions-common/.github/actions/dotnet-test@315788024be8e61daa4f2b957e6476746211b522 # main
+        with:
+          solution-file: HyperCodecs.slnx
+          test-projects: tests/**/*.csproj
+          test-timeout: 25m
+          artifact-suffix: -${{ matrix.os }}
