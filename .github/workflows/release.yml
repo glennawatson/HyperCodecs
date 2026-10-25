@@ -35,14 +35,14 @@ permissions:
   contents: read
 
 jobs:
-  version:
-    name: Resolve release version
-    runs-on: ubuntu-latest
+  build:
+    name: Build and pack the NuGet libraries
+    # HyperCodecs.Platform builds its Apple targets on macOS and Windows only, so the packages are built and packed on macOS.
+    runs-on: macos-latest
     permissions:
       contents: read
     outputs:
       semver2: ${{ steps.minver.outputs.SemVer2 }}
-      version: ${{ steps.minver.outputs.NuGetPackageVersion }}
       tag: ${{ steps.tagname.outputs.tag }}
       prerelease: ${{ steps.tagname.outputs.prerelease }}
       sourceSha: ${{ steps.tagname.outputs.sha }}
@@ -56,7 +56,13 @@ jobs:
       - name: Setup .NET Environment
         uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
         with:
+          src-folder: 'src'
+          solution-file: HyperCodecs.slnx
+          install-workloads: 'true'
           stamp-version: 'false'
+          dotnet-versions: |
+            11.x
+            10.x
 
       - name: Validate version inputs
         uses: glennawatson/actions-common/.github/actions/release-inputs-validate@315788024be8e61daa4f2b957e6476746211b522 # main
@@ -94,52 +100,22 @@ jobs:
           auto-increment: patch
           version-override: ${{ inputs.versionOverride != '' && inputs.versionOverride || steps.bump.outputs.version }}
 
-  build:
-    name: Build and pack the NuGet libraries
-    needs: version
-    # HyperCodecs.Platform builds its Apple targets on macOS and Windows only, so the packages are packed on macOS.
-    runs-on: macos-latest
-    permissions:
-      contents: read
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.version.outputs.sourceSha }}
-          fetch-depth: 0
-
-      - name: Setup .NET Environment
-        uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
-        with:
-          src-folder: 'src'
-          solution-file: HyperCodecs.slnx
-          install-workloads: 'true'
-          stamp-version: 'false'
-          dotnet-versions: |
-            11.x
-            10.x
-
       - name: Build
         uses: glennawatson/actions-common/.github/actions/dotnet-build@315788024be8e61daa4f2b957e6476746211b522 # main
         with:
           solution-file: HyperCodecs.slnx
 
-      - name: Pack HyperCodecs
-        run: dotnet pack src/HyperCodecs/HyperCodecs.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
-
-      - name: Pack HyperCodecs.Platform
-        run: dotnet pack src/HyperCodecs.Platform/HyperCodecs.Platform.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
-
-      - name: Pack HyperCodecs.Platform.Linux
-        run: dotnet pack src/HyperCodecs.Platform.Linux/HyperCodecs.Platform.Linux.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
+      # Only the three library projects are packable, so this packs exactly those.
+      - name: Pack NuGet packages
+        shell: bash
+        working-directory: src
+        run: dotnet pack HyperCodecs.slnx --no-build --configuration Release -o "${GITHUB_WORKSPACE}/packages"
 
       - name: Upload unsigned packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: unsigned-nuget
-          path: artifacts/nuget/*.nupkg
+          path: packages/*.nupkg
           if-no-files-found: error
 
   sign:
@@ -181,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   publish-nuget:
-    needs: [ version, sign ]
+    needs: [ build, sign ]
     runs-on: ubuntu-latest
     environment:
       name: release
@@ -219,7 +195,7 @@ jobs:
         run: dotnet run --file "$GITHUB_WORKSPACE/.github/scripts/nuget-push.cs"
 
   create-release:
-    needs: [ version, publish-nuget ]
+    needs: [ build, publish-nuget ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -246,17 +222,17 @@ jobs:
       - name: Generate release notes
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.version.outputs.semver2 }}
+          RELEASE_VERSION: ${{ needs.build.outputs.semver2 }}
         run: git-release-notes --release-version "$RELEASE_VERSION" --output-file release-notes.md
 
-      # Also creates the tag, pinned by --target to the commit the version job resolved.
+      # Also creates the tag, pinned by --target to the commit the build job built.
       - name: Create GitHub Release
         uses: glennawatson/actions-common/.github/actions/github-release-create@315788024be8e61daa4f2b957e6476746211b522 # main
         env:
           GH_TOKEN: ${{ github.token }}
         with:
           repository: ${{ github.repository }}
-          tag: ${{ needs.version.outputs.tag }}
-          target: ${{ needs.version.outputs.sourceSha }}
-          title: ${{ needs.version.outputs.semver2 }}
-          prerelease: ${{ needs.version.outputs.prerelease }}
+          tag: ${{ needs.build.outputs.tag }}
+          target: ${{ needs.build.outputs.sourceSha }}
+          title: ${{ needs.build.outputs.semver2 }}
+          prerelease: ${{ needs.build.outputs.prerelease }}

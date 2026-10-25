@@ -5,6 +5,10 @@
     <TargetFrameworks>$(HyperCodecsWindowsTargets)</TargetFrameworks>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\HyperCodecs\HyperCodecs.csproj" />
     <ProjectReference Include="..\..\HyperCodecs.Platform\HyperCodecs.Platform.csproj" />
