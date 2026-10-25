@@ -6,50 +6,22 @@ using BenchmarkDotNet.Attributes;
 
 namespace HyperCodecs.Benchmarks;
 
-/// <summary>
-/// Decodes large pictures with the C# decoders, where the cost of decoding is in the work on each picture and not in starting up. The files
-/// are not in the repository: set HYPERCODECS_BIG_CLIPS to a folder of H.264 or H.265 files of 720p or larger. Without it, a small fixture runs.
-/// </summary>
+/// <summary>Decodes a fixture with the C# decoders, where the cost of decoding is in the work on each picture and not in starting up.</summary>
 public class HyperCodecsLargeClipBenchmarks
 {
-    /// <summary>The name of the environment variable that names a folder of larger files.</summary>
-    private const string BigClipsVariable = "HYPERCODECS_BIG_CLIPS";
-
-    /// <summary>The prefix of a source that lives in the folder of larger files.</summary>
-    private const string BigPrefix = "big:";
-
-    /// <summary>The fixture that runs when no folder is named.</summary>
+    /// <summary>The fixture that runs.</summary>
     private const string Fallback = "h264-p-cabac.mp4";
 
     /// <summary>The coded pictures and the decoder.</summary>
     private VideoClip? _clip;
 
     /// <summary>Gets or sets the file under test.</summary>
-    [ParamsSource(nameof(Sources))]
+    [Params(Fallback)]
     public string Source { get; set; } = Fallback;
-
-    /// <summary>Gets the files to measure: those in the folder named by the environment variable, or a small fixture.</summary>
-    /// <returns>The sources.</returns>
-    public static IEnumerable<string> Sources()
-    {
-        var folder = Environment.GetEnvironmentVariable(BigClipsVariable);
-        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
-        {
-            yield return Fallback;
-            yield break;
-        }
-
-        foreach (var path in Directory.EnumerateFiles(folder, "*.mp4").Order(StringComparer.Ordinal))
-        {
-            yield return BigPrefix + Path.GetFileName(path);
-        }
-    }
 
     /// <summary>Reads the coded pictures of the file and makes the decoder.</summary>
     [GlobalSetup]
-    public void Setup() => _clip = Source.StartsWith(BigPrefix, StringComparison.Ordinal)
-        ? VideoClip.LoadFile(Path.Combine(Environment.GetEnvironmentVariable(BigClipsVariable)!, Source[BigPrefix.Length..]))
-        : VideoClip.Load(Source);
+    public void Setup() => _clip = VideoClip.Load(Source);
 
     /// <summary>Lets go of the decoder.</summary>
     [GlobalCleanup]

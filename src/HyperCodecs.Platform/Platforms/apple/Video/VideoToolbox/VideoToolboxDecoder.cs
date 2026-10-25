@@ -104,7 +104,7 @@ internal sealed unsafe class VideoToolboxDecoder : VideoDecoder
     internal static VideoToolboxDecoder? TryCreate(MediaTrack track, out DecoderFailure failure)
     {
         ArgumentNullException.ThrowIfNull(track);
-        if (!(OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsTvOS() || OperatingSystem.IsMacCatalyst()) || track.Kind != MediaTrackKind.Video || track.Width <= 0 || track.Height <= 0 || track.Codec is not (MediaCodec.H264 or MediaCodec.H265))
+        if (!IsApplePlatform() || !IsSupportedTrack(track))
         {
             failure = new("The track is not one VideoToolbox can be given", 0);
             return null;
@@ -125,6 +125,17 @@ internal sealed unsafe class VideoToolboxDecoder : VideoDecoder
         decoder.Dispose();
         return null;
     }
+
+    /// <summary>Tells whether the code is running on a system that has VideoToolbox.</summary>
+    /// <returns><see langword="true"/> on macOS, iOS, tvOS and Mac Catalyst.</returns>
+    private static bool IsApplePlatform() =>
+        OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsTvOS() || OperatingSystem.IsMacCatalyst();
+
+    /// <summary>Tells whether a track is an H.264 or H.265 video track with a picture size.</summary>
+    /// <param name="track">The track.</param>
+    /// <returns><see langword="true"/> when VideoToolbox can be given the track.</returns>
+    private static bool IsSupportedTrack(MediaTrack track) =>
+        track.Kind == MediaTrackKind.Video && track.Width > 0 && track.Height > 0 && track.Codec is MediaCodec.H264 or MediaCodec.H265;
 
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)

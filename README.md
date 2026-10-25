@@ -69,18 +69,6 @@ dotnet add package HyperCodecs.Platform.Linux
 
 Hardware decoders cover H.264 and H.265. `PlatformVideoDecoders.Create` and `LinuxVideoDecoders.Create` use the hardware first for large pictures and the managed decoder first for small ones. The plain `net10.0` and `net11.0` builds of `HyperCodecs.Platform` have no system code.
 
-## Build and test
-
-The repository needs the .NET 11 SDK. The core library, tests and benchmarks build for `net10.0` and `net11.0`. `HyperCodecs.Platform` also builds for Windows and Android, and for Apple systems on macOS and Windows. Android and Apple builds need their workloads (`dotnet workload restore`).
-
-```console
-cd src
-dotnet build HyperCodecs.slnx
-dotnet test --solution HyperCodecs.slnx
-```
-
-Benchmarks run with BenchmarkDotNet: `dotnet run -c Release -f net11.0 --project src/benchmarks/HyperCodecs.Benchmarks -- --filter '*Opus*'`. Contributor notes are in [CLAUDE.md](CLAUDE.md).
-
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

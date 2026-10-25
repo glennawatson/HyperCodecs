@@ -9,17 +9,10 @@ namespace HyperCodecs.Benchmarks;
 
 /// <summary>
 /// Decodes the same files with the C# decoder and with the decoder the system provides (the graphics hardware where there is one, whatever the
-/// picture size), keeping the decoder from run to run so the cost of starting it is not counted. Set HYPERCODECS_BIG_CLIPS to a folder holding larger H.264 or H.265 files
-/// to measure them too.
+/// picture size), keeping the decoder from run to run so the cost of starting it is not counted.
 /// </summary>
 public class HyperCodecsPlatformVideoDecodeBenchmarks
 {
-    /// <summary>The name of the environment variable that names a folder of larger files.</summary>
-    private const string BigClipsVariable = "HYPERCODECS_BIG_CLIPS";
-
-    /// <summary>The prefix of a source that lives in the folder of larger files.</summary>
-    private const string BigPrefix = "big:";
-
     /// <summary>The coded pictures, read once.</summary>
     private List<MediaPacket>? _packets;
 
@@ -30,30 +23,12 @@ public class HyperCodecsPlatformVideoDecodeBenchmarks
     private VideoDecoder? _decoder;
 
     /// <summary>Gets or sets the file under test.</summary>
-    [ParamsSource(nameof(Sources))]
+    [Params("h264-b-cabac-deblock.mp4", "h265-b.mp4")]
     public string Source { get; set; } = "h264-b-cabac-deblock.mp4";
 
     /// <summary>Gets or sets a value indicating whether to use the system's decoder instead of the C# one.</summary>
     [Params(false, true)]
     public bool System { get; set; }
-
-    /// <summary>Gets the files to measure: two small fixtures, and any files in the folder named by the environment variable.</summary>
-    /// <returns>The sources.</returns>
-    public static IEnumerable<string> Sources()
-    {
-        yield return "h264-b-cabac-deblock.mp4";
-        yield return "h265-b.mp4";
-        var folder = Environment.GetEnvironmentVariable(BigClipsVariable);
-        if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
-        {
-            yield break;
-        }
-
-        foreach (var path in Directory.EnumerateFiles(folder, "*.mp4").Order(StringComparer.Ordinal))
-        {
-            yield return BigPrefix + Path.GetFileName(path);
-        }
-    }
 
     /// <summary>Reads the coded pictures of the file and makes the decoder.</summary>
     /// <exception cref="InvalidDataException">The file did not open.</exception>
@@ -61,9 +36,7 @@ public class HyperCodecsPlatformVideoDecodeBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        var path = Source.StartsWith(BigPrefix, StringComparison.Ordinal)
-            ? Path.Combine(Environment.GetEnvironmentVariable(BigClipsVariable)!, Source[BigPrefix.Length..])
-            : Path.Combine(AppContext.BaseDirectory, "Fixtures", Source);
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", Source);
         using var container = MediaContainers.Open(path) ?? throw new InvalidDataException($"{Source} did not open.");
         var index = container.FindTrack(MediaTrackKind.Video);
         var track = container.Tracks[index];

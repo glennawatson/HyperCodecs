@@ -13,7 +13,7 @@ internal static class ScriptProcess
     /// <summary>The .NET command available on PATH.</summary>
     internal const string Dotnet = "dotnet";
 
-    /// <summary>Finds the checkout from its source path, CI workspace or working directory.</summary>
+    /// <summary>Finds the checkout from its source path or working directory.</summary>
     /// <param name="source">The calling script's source path.</param>
     /// <returns>The checkout directory.</returns>
     /// <exception cref="DirectoryNotFoundException">The checkout cannot be located.</exception>
@@ -25,12 +25,7 @@ internal static class ScriptProcess
             return sourceRoot;
         }
 
-        // CI source paths may be mapped to /_/, which is not the runner's checkout.
-        if (Environment.GetEnvironmentVariable("GITHUB_WORKSPACE") is { Length: > 0 } workspace && IsCheckout(workspace))
-        {
-            return Path.GetFullPath(workspace);
-        }
-
+        // CI source paths may be mapped to /_/, which is not the runner's checkout, so fall back to the working directory.
         for (var directory = new DirectoryInfo(Directory.GetCurrentDirectory()); directory is not null; directory = directory.Parent)
         {
             if (IsCheckout(directory.FullName))
@@ -39,7 +34,7 @@ internal static class ScriptProcess
             }
         }
 
-        throw new DirectoryNotFoundException("Cannot locate the checkout containing HyperCodecs.slnx from the source path, GITHUB_WORKSPACE or working directory.");
+        throw new DirectoryNotFoundException("Cannot locate the checkout containing HyperCodecs.slnx from the source path or working directory.");
     }
 
     /// <summary>Starts a child with explicit arguments and environment overrides.</summary>

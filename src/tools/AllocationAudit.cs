@@ -3,7 +3,6 @@
 #:package Microsoft.Diagnostics.Tracing.TraceEvent
 #:property IsAotCompatible=false
 #:property PublishAot=false
-#:include SourceLines.cs
 
 // Copyright (c) 2026 Glenn Watson. All rights reserved.
 // Glenn Watson licenses this file to you under the MIT license.
@@ -432,9 +431,6 @@ namespace HyperCodecs.Scripts
             /// <summary>The type names by id, shared by every benchmark of a trace.</summary>
             private readonly Dictionary<ulong, string> _typeNames;
 
-            /// <summary>The source lines of the build, or <see langword="null"/> when no PDB folder is named.</summary>
-            private readonly SourceLines? _lines = SourceLines.FromEnvironment();
-
             /// <summary>Whether a measured iteration is running.</summary>
             private bool _measuring;
 
@@ -543,13 +539,6 @@ namespace HyperCodecs.Scripts
                 }
 
                 var frame = address.FullMethodName ?? string.Empty;
-
-                // With the build's PDB files named by HYPERCODECS_SYMBOLS, each site also names its source line.
-                if (_lines?.Find(address) is { } line)
-                {
-                    frame = $"{frame} @ {line}";
-                }
-
                 var current = Sites.GetValueOrDefault((type, frame));
                 Sites[(type, frame)] = (current.Count + count, current.Bytes + bytes);
                 var total = Types.GetValueOrDefault(type);

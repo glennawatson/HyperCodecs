@@ -29,12 +29,7 @@ if (args.Length < MinimumArguments || args[0] == "--help")
 
 var root = ScriptProcess.Root();
 
-var framework = Environment.GetEnvironmentVariable("BENCHMARK_FRAMEWORK") ?? "net11.0";
-
-if (framework is not ("net10.0" or "net11.0"))
-{
-    throw new ArgumentException("BENCHMARK_FRAMEWORK must be net10.0 or net11.0.");
-}
+const string framework = "net11.0";
 
 var leewayIndex = Array.IndexOf(args, "--leeway");
 

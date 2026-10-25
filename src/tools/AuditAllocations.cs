@@ -16,7 +16,7 @@ var toolRoot = ScriptProcess.Root();
 if (args.Contains("--help"))
 {
     Console.WriteLine(
-        "dotnet run --file src/tools/AuditAllocations.cs -- [--root checkout] [benchmark filters]\nBENCHMARK_FRAMEWORK selects net11.0 (default) or net10.0.");
+        "dotnet run --file src/tools/AuditAllocations.cs -- [--root checkout] [benchmark filters]");
     return 0;
 }
 
@@ -52,12 +52,7 @@ for (var index = 0; index < args.Length; index++)
     }
 }
 
-var framework = Environment.GetEnvironmentVariable("BENCHMARK_FRAMEWORK") ?? "net11.0";
-
-if (framework is not ("net10.0" or "net11.0"))
-{
-    throw new ArgumentException("BENCHMARK_FRAMEWORK must be net10.0 or net11.0.");
-}
+const string framework = "net11.0";
 
 var project = Path.Combine(root, "src", "benchmarks", "HyperCodecs.Benchmarks");
 

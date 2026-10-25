@@ -51,7 +51,7 @@ Write and check each decoder against its specification. The specifications are i
 - Tests and benchmarks run against the Windows build on Windows and the Linux project on Linux. The Apple and Android builds are compile-checked only.
 - `src/tests/HyperCodecs.Tests` holds the tests. `Fixtures/` holds short files from independent encoders, each with the checksum of the expected output.
 - `src/benchmarks/HyperCodecs.Benchmarks` holds the BenchmarkDotNet benchmarks and the allocation harness. `HyperCodecs.Benchmarks.Generator` lists the benchmarks for the harness so no reflection is needed.
-- `src/tools` holds single-file C# tools; see its README.
+- `src/tools` holds single-file C# tools: `AuditAllocations.cs` and `AllocationAudit.cs` for allocations, `CpuAudit.cs` for CPU traces, `CompareBenchmarks.cs` for a baseline comparison, and `RunBoundedTests.cs` for time-limited test runs.
 
 ## Verification
 
