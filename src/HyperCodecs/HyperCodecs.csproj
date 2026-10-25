@@ -10,10 +10,6 @@
     <PackageId>HyperCodecs</PackageId>
     <Title>HyperCodecs</Title>
     <PackageTags>audio;video;codec;aac;flac;mp3;opus;vorbis;h264;h265;hevc;mp4;matroska;ogg;aot</PackageTags>
-    <PackageProjectUrl>https://github.com/glennawatson/HyperCodecs</PackageProjectUrl>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PublishRepositoryUrl>true</PublishRepositoryUrl>
-    <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <!-- The PDB is embedded in the assembly (DebugType embedded), so there is no separate symbol package. -->
     <IncludeSymbols>false</IncludeSymbols>
     <EnablePackageValidation>true</EnablePackageValidation>

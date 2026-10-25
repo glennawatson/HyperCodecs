@@ -26,12 +26,25 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DebugType>embedded</DebugType>
     <Authors>Glenn Watson</Authors>
+    <Owners>glennawatson</Owners>
     <Company>Glenn Watson</Company>
     <Product>HyperCodecs</Product>
-    <Copyright>Copyright (c) 2026 Glenn Watson</Copyright>
+    <CopyrightStartYear>2026</CopyrightStartYear>
+    <CopyrightCurrentYear>$([System.DateTime]::UtcNow.ToString("yyyy"))</CopyrightCurrentYear>
+    <CopyrightYearRange Condition="'$(CopyrightCurrentYear)' == '$(CopyrightStartYear)'">$(CopyrightStartYear)</CopyrightYearRange>
+    <CopyrightYearRange Condition="'$(CopyrightCurrentYear)' != '$(CopyrightStartYear)'">$(CopyrightStartYear)-$(CopyrightCurrentYear)</CopyrightYearRange>
+    <Copyright>Copyright (c) $(CopyrightYearRange) Glenn Watson</Copyright>
+    <NeutralLanguage>en</NeutralLanguage>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageProjectUrl>https://github.com/glennawatson/HyperCodecs</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReleaseNotes>https://github.com/glennawatson/HyperCodecs/releases</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/glennawatson/HyperCodecs</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -82,6 +95,10 @@
       <Link>$(AssemblyName).testconfig.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\icons\icon.png" Pack="true" PackagePath="\" Visible="false" Condition="Exists('$(MSBuildThisFileDirectory)..\icons\icon.png')" />
   </ItemGroup>
 
   <!-- System.Threading.Lock on .NET 9+. -->
