@@ -1,87 +1,187 @@
 name: Release
+
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Release level for the new tag.'
+        description: 'Release level for the new tag. Pick one, unless versionOverride is set.'
         required: true
         type: choice
         options:
-        - major
-        - minor
-        - patch
+          - '(pick one)'
+          - major
+          - minor
+          - patch
+
       preRelease:
-        description: 'Pre-release channel (e.g. beta, rc). Empty = stable release.'
+        description: 'Pre-release channel (e.g. beta, rc). The version becomes <bumped-core>-<channel>.<N>. Empty = stable release.'
         required: false
         type: string
         default: ''
+
+      versionOverride:
+        description: 'Exact version to release (e.g. 4.2.5), bypassing the bump from the latest tag. Leave bump at "(pick one)".'
+        required: false
+        type: string
+        default: ''
+
+      sourceRef:
+        description: 'Git ref (tag, branch or SHA) to release from. Empty = the ref this run was started on.'
+        required: false
+        type: string
+        default: ''
+
 permissions:
   contents: read
+
 jobs:
   version:
     name: Resolve release version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag }}
-      prerelease: ${{ steps.bump.outputs.prerelease }}
+      semver2: ${{ steps.minver.outputs.SemVer2 }}
+      version: ${{ steps.minver.outputs.NuGetPackageVersion }}
+      tag: ${{ steps.tagname.outputs.tag }}
+      prerelease: ${{ steps.tagname.outputs.prerelease }}
+      sourceSha: ${{ steps.tagname.outputs.sha }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        fetch-depth: 0
-    - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
-      with:
-        src-folder: '.'
-        stamp-version: 'false'
-        dotnet-versions: |
-          11.x
-    - name: Compute version and tag
-      id: bump
-      uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@315788024be8e61daa4f2b957e6476746211b522 # main
-      with:
-        bump: ${{ inputs.bump }}
-        tag-prefix: ''
-        pre-release-id: ${{ inputs.preRelease }}
-        push-tag: 'false'
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.sourceRef }}
+          fetch-depth: 0
 
-  pack-nuget:
-    name: Pack the NuGet libraries
+      - name: Setup .NET Environment
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          stamp-version: 'false'
+
+      - name: Validate version inputs
+        uses: glennawatson/actions-common/.github/actions/release-inputs-validate@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          bump: ${{ inputs.bump != '(pick one)' && inputs.bump || '' }}
+          pre-release: ${{ inputs.preRelease }}
+          version-override: ${{ inputs.versionOverride }}
+
+      - name: Compute version and tag
+        if: inputs.bump != '(pick one)' && inputs.versionOverride == ''
+        id: bump
+        uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          bump: ${{ inputs.bump }}
+          tag-prefix: ''
+          pre-release-id: ${{ inputs.preRelease }}
+          push-tag: 'false'
+
+      # compute-version-and-tag rejects an existing bump tag; an existing override tag is rejected here.
+      - name: Resolve release tag
+        id: tagname
+        uses: glennawatson/actions-common/.github/actions/release-tag-resolve@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          bump-tag: ${{ steps.bump.outputs.tag }}
+          bump-prerelease: ${{ steps.bump.outputs.prerelease }}
+          version-override: ${{ inputs.versionOverride }}
+          tag-prefix: ''
+
+      - name: Stamp version with MinVer
+        id: minver
+        uses: glennawatson/actions-common/.github/actions/minver@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          tag-prefix: ''
+          minimum-major-minor: '0.1'
+          auto-increment: patch
+          version-override: ${{ inputs.versionOverride != '' && inputs.versionOverride || steps.bump.outputs.version }}
+
+  build:
+    name: Build and pack the NuGet libraries
     needs: version
     # HyperCodecs.Platform builds its Apple targets on macOS and Windows only, so the packages are packed on macOS.
     runs-on: macos-latest
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
-      with:
-        src-folder: 'src'
-        solution-file: HyperCodecs.slnx
-        install-workloads: 'true'
-        stamp-version: 'false'
-        dotnet-versions: |
-          11.x
-          10.x
-    - name: Pack HyperCodecs
-      run: dotnet pack src/HyperCodecs/HyperCodecs.csproj -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
-    - name: Pack HyperCodecs.Platform
-      run: dotnet pack src/HyperCodecs.Platform/HyperCodecs.Platform.csproj -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
-    - name: Pack HyperCodecs.Platform.Linux
-      run: dotnet pack src/HyperCodecs.Platform.Linux/HyperCodecs.Platform.Linux.csproj -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
-    - name: Upload the package
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      with:
-        name: release-assets
-        path: artifacts/nuget/*.nupkg
-        if-no-files-found: error
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.version.outputs.sourceSha }}
+          fetch-depth: 0
+
+      - name: Setup .NET Environment
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          src-folder: 'src'
+          solution-file: HyperCodecs.slnx
+          install-workloads: 'true'
+          stamp-version: 'false'
+          dotnet-versions: |
+            11.x
+            10.x
+
+      - name: Build
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          solution-file: HyperCodecs.slnx
+
+      - name: Pack HyperCodecs
+        run: dotnet pack src/HyperCodecs/HyperCodecs.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
+
+      - name: Pack HyperCodecs.Platform
+        run: dotnet pack src/HyperCodecs.Platform/HyperCodecs.Platform.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
+
+      - name: Pack HyperCodecs.Platform.Linux
+        run: dotnet pack src/HyperCodecs.Platform.Linux/HyperCodecs.Platform.Linux.csproj --no-build -c Release -o artifacts/nuget "-p:Version=$VERSION" "-p:MinVerVersionOverride=$VERSION"
+
+      - name: Upload unsigned packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: unsigned-nuget
+          path: artifacts/nuget/*.nupkg
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read
+      packages: read
+    # SimplySign has no headless API; certum-sign drives its GUI under Xvfb, which needs Linux.
+    container:
+      image: ghcr.io/reactiveui/certum-signer:latest@sha256:f15c2913f472c60b314b6487829dd559b5eea8fa92ae2add895ba1b0e183380b
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    # Composite actions read signing credentials from the environment.
+    env:
+      CERTUM_USER_ID: ${{ secrets.CERTUM_USER_ID }}
+      CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+      CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
+    steps:
+      - name: Download unsigned packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: unsigned-nuget
+          path: signed
+
+      - name: Sign packages with Certum SimplySign
+        uses: glennawatson/actions-common/.github/actions/certum-sign@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          nuget: 'signed/*.nupkg'
+
+      - name: Upload signed packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: signed-nuget
+          path: signed/*.nupkg
+          if-no-files-found: error
 
   publish-nuget:
-    name: Publish to NuGet
-    needs: [version, pack-nuget]
+    needs: [ version, sign ]
     runs-on: ubuntu-latest
     environment:
       name: release
@@ -89,36 +189,74 @@ jobs:
       contents: read
       id-token: write
     steps:
-    - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@315788024be8e61daa4f2b957e6476746211b522 # main
-      with:
-        stamp-version: 'false'
-        dotnet-versions: |
-          11.x
-    - name: Download the package
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-      with:
-        name: release-assets
-        path: packages
-    - name: NuGet login (OIDC trusted publishing)
-      id: nuget-login
-      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
-      with:
-        user: ${{ secrets.NUGET_USER }}
-    - name: Push to NuGet
-      env:
-        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-      run: dotnet nuget push "packages/*.nupkg" --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --skip-duplicate
+      - name: Checkout publishing script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: .github/scripts
 
-  release:
-    name: Create release (${{ needs.version.outputs.version }})
-    needs: [version, publish-nuget]
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 11.0.x
+
+      - name: Download signed packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: signed-nuget
+          path: signed
+
+      - name: NuGet login (OIDC trusted publishing)
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        id: nuget-login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to NuGet
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        working-directory: ${{ runner.temp }}
+        run: dotnet run --file "$GITHUB_WORKSPACE/.github/scripts/nuget-push.cs"
+
+  create-release:
+    needs: [ version, publish-nuget ]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    uses: glennawatson/actions-common/.github/workflows/workflow-common-create-release.yml@315788024be8e61daa4f2b957e6476746211b522 # main
-    with:
-      version: ${{ needs.version.outputs.version }}
-      tag: ${{ needs.version.outputs.tag }}
-      artifactName: release-assets
-      assetGlob: '*'
-      prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Download signed packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: signed-nuget
+          path: signed
+
+      - name: Setup .NET Environment
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        with:
+          stamp-version: 'false'
+
+      - name: Install GitReleaseNoteGenerator
+        run: dotnet tool install -g GitReleaseNoteGenerator
+
+      - name: Generate release notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.version.outputs.semver2 }}
+        run: git-release-notes --release-version "$RELEASE_VERSION" --output-file release-notes.md
+
+      # Also creates the tag, pinned by --target to the commit the version job resolved.
+      - name: Create GitHub Release
+        uses: glennawatson/actions-common/.github/actions/github-release-create@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          repository: ${{ github.repository }}
+          tag: ${{ needs.version.outputs.tag }}
+          target: ${{ needs.version.outputs.sourceSha }}
+          title: ${{ needs.version.outputs.semver2 }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
