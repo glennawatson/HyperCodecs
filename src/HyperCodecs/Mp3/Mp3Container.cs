@@ -134,6 +134,7 @@ internal sealed class Mp3Container : MediaContainer
         var offset = FindFrame(window, searchFrom, SearchLimit);
         if (offset < 0 || !TryHeaderAt(window, offset, out var header) || header.Layer != Mp3FrameHeader.Layer3)
         {
+            window.Release();
             stream.Position = start;
             return null;
         }
@@ -146,6 +147,7 @@ internal sealed class Mp3Container : MediaContainer
             audioStart = offset + header.FrameLength;
             if (!TryHeaderAt(window, audioStart, out var after) || !after.IsSameStream(header))
             {
+                window.Release();
                 stream.Position = start;
                 return null;
             }
@@ -159,7 +161,11 @@ internal sealed class Mp3Container : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        // The window does not own the stream; the container does, through it.
+        // The window does not own the stream; the container does, through it. The window gives its buffer back to the pool.
+        if (disposing)
+        {
+            _window.Release();
+        }
     }
 
     /// <summary>Moves past the ID3v2 tags at the start of the file.</summary>

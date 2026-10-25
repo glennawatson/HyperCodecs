@@ -45,6 +45,9 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
     /// <summary>The surfaces kept beyond the reference frames: the picture being decoded and one spare.</summary>
     private const int ExtraSurfaces = 2;
 
+    /// <summary>The pictures the list of spare pictures has room for to begin with: more than a stream keeps, so it does not grow while decoding.</summary>
+    private const int SpareCapacity = 32;
+
     /// <summary>The pixels in a crop unit of 4:2:0 video.</summary>
     private const int CropUnit = 2;
 
@@ -90,8 +93,14 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
     /// <summary>The slices of the picture being decoded.</summary>
     private readonly List<SliceRecord> _slices = [];
 
+    /// <summary>The headers the slices are read into, one for each slice of the largest picture so far, so reading a slice makes none.</summary>
+    private readonly List<H264SliceHeader> _headers = [];
+
     /// <summary>The pictures that hold a surface.</summary>
     private readonly List<H264Picture> _live = [];
+
+    /// <summary>The pictures whose surface has been given back, to be used again.</summary>
+    private readonly Stack<H264Picture> _spare = new(SpareCapacity);
 
     /// <summary>The slice parameter buffers, reused from picture to picture.</summary>
     private readonly List<VaBlock> _sliceBlocks = [];
@@ -332,10 +341,18 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
     /// <param name="block">The slice parameter buffer.</param>
     /// <param name="group">Where the group of fields starts.</param>
     /// <param name="weights">The weights of each entry of the list.</param>
-    private static void WriteWeightGroup(VaBlock block, int group, H264Weight[] weights)
+    private static void WriteWeightGroup(VaBlock block, int group, ReadOnlySpan<H264Weight> weights)
     {
-        block.Set(group + VaH264Layout.LumaFlag, (byte)Bit(Array.Exists(weights, static weight => weight.HasLuma)));
-        block.Set(group + VaH264Layout.ChromaFlag, (byte)Bit(Array.Exists(weights, static weight => weight.HasChroma)));
+        var anyLuma = false;
+        var anyChroma = false;
+        foreach (var weight in weights)
+        {
+            anyLuma |= weight.HasLuma;
+            anyChroma |= weight.HasChroma;
+        }
+
+        block.Set(group + VaH264Layout.LumaFlag, (byte)Bit(anyLuma));
+        block.Set(group + VaH264Layout.ChromaFlag, (byte)Bit(anyChroma));
         for (var i = 0; i < Math.Min(weights.Length, VaH264Layout.ReferenceListCount); i++)
         {
             var weight = weights[i];
@@ -389,7 +406,13 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
         }
 
         var length = NalUnits.Unescape(nal, _rbsp, 1);
-        var header = H264SliceHeaderReader.Read(_rbsp.AsSpan(0, length), nal[0], _sets, out var sps, out var pps, out var dataBit);
+        while (_headers.Count <= _slices.Count)
+        {
+            _headers.Add(new());
+        }
+
+        var header = _headers[_slices.Count];
+        H264SliceHeaderReader.Read(_rbsp.AsSpan(0, length), nal[0], _sets, header, out var sps, out var pps, out var dataBit);
         _slices.Add(new(header, sps, pps, dataBit, range));
     }
 
@@ -401,7 +424,10 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
     {
         var first = _slices[0];
         _pictureCount++;
-        var picture = new H264Picture(0, 0) { Uid = _pictureCount, Poc = _poc.Next(first.Header, first.Sps) };
+        var picture = _spare.TryPop(out var spare) ? spare : new(0, 0);
+        picture.Recycle();
+        picture.Uid = _pictureCount;
+        picture.Poc = _poc.Next(first.Header, first.Sps);
         var surface = _session.Rent();
         picture.Surface = surface;
         _live.Add(picture);
@@ -420,7 +446,7 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
         _session.Read(surface, frame, _cropLeft, _cropTop);
         var sps = first.Sps;
         _queue.Add(new(picture.Poc, frame), first.Header.IsIdr, sps.MaxNumReorderFrames >= 0 ? sps.MaxNumReorderFrames : sps.DpbFrames, output);
-        _dpb.Mark(new(picture, first.Header.Picture.FrameNum), first.Header, sps);
+        _dpb.Mark(picture.ReferenceEntry(first.Header.Picture.FrameNum), first.Header, sps);
         ReleaseUnused();
     }
 
@@ -533,6 +559,7 @@ internal sealed unsafe class VaApiH264Decoder : VideoDecoder
             }
 
             _session.Return(_live[i].Surface);
+            _spare.Push(_live[i]);
             _live.RemoveAt(i);
         }
     }

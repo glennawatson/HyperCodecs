@@ -33,7 +33,7 @@ internal sealed class H264SliceJob
     internal int Length { get; private set; }
 
     /// <summary>Gets the slice header.</summary>
-    internal H264SliceHeader Header { get; private set; } = null!;
+    internal H264SliceHeader Header { get; } = new();
 
     /// <summary>Gets the parameter sets the slice uses.</summary>
     internal H264SliceSets Sets { get; private set; }
@@ -69,7 +69,7 @@ internal sealed class H264SliceJob
 
         payload.CopyTo(Rbsp);
         Length = payload.Length;
-        Header = header;
+        Header.CopyFrom(header);
         Sets = sets;
         Scale = scale;
         DataBit = dataBit;

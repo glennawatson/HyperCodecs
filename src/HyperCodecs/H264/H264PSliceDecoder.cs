@@ -45,32 +45,35 @@ internal sealed class H264PSliceDecoder
     /// <summary>The sub_mb_type of a sub-macroblock split in two along its height.</summary>
     private const int Sub4x8 = 2;
 
-    /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
-
-    /// <summary>The frames the slice predicts from, by reference index.</summary>
-    private readonly H264RefPicture[] _refs;
-
     /// <summary>Predicts the samples of inter blocks.</summary>
     private readonly H264InterPredictor _predictor;
 
-    /// <summary>Whether the pictures may use the 8x8 transform.</summary>
-    private readonly bool _transform8x8Allowed;
-
     /// <summary>Makes the samples of the macroblocks.</summary>
-    private readonly H264IntraReconstructor _reconstructor;
+    private readonly H264IntraReconstructor _reconstructor = new();
 
     /// <summary>Reads the intra macroblocks of the slice.</summary>
-    private readonly H264IntraSliceDecoder _intra;
-
-    /// <summary>The number of the slice being decoded.</summary>
-    private readonly int _slice;
+    private readonly H264IntraSliceDecoder _intra = new();
 
     /// <summary>The macroblock being decoded.</summary>
     private readonly H264CurrentMb _mb;
 
+    /// <summary>The work area that holds the macroblock the intra decoder works on.</summary>
+    private readonly H264SliceWork _work;
+
     /// <summary>Predicts motion vectors for the macroblock being decoded.</summary>
-    private readonly H264MotionPrediction _motion;
+    private readonly H264MotionPrediction _motion = new();
+
+    /// <summary>The picture being decoded.</summary>
+    private H264Picture _picture = null!;
+
+    /// <summary>The frames the slice predicts from, by reference index.</summary>
+    private H264RefPicture[] _refs = null!;
+
+    /// <summary>Whether the pictures may use the 8x8 transform.</summary>
+    private bool _transform8x8Allowed;
+
+    /// <summary>The number of the slice being decoded.</summary>
+    private int _slice;
 
     /// <summary>The luma quantiser of the macroblock before.</summary>
     private int _qp;
@@ -79,26 +82,33 @@ internal sealed class H264PSliceDecoder
     private bool _allow8x8;
 
     /// <summary>Initializes a new instance of the <see cref="H264PSliceDecoder"/> class.</summary>
+    /// <param name="work">The decoder's working memory.</param>
+    internal H264PSliceDecoder(H264SliceWork work)
+    {
+        _mb = work.Mb;
+        _work = work;
+        _predictor = new(work);
+    }
+
+    /// <summary>Points the decoder at a P slice, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture to decode into.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="scale">The level scale factors.</param>
     /// <param name="slice">The number of the slice.</param>
     /// <param name="header">The slice header, which gives the starting quantiser and the weights.</param>
     /// <param name="refs">Reference list 0.</param>
-    /// <param name="work">The decoder's working memory.</param>
-    internal H264PSliceDecoder(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, H264SliceHeader header, H264RefPicture[] refs, H264SliceWork work)
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, H264SliceHeader header, H264RefPicture[] refs)
     {
         var startQp = pps.PicInitQp + header.Tail.QpDelta;
-        _mb = work.Mb;
         _picture = picture;
         _refs = refs;
-        _predictor = new(picture, pps.WeightedPred ? H264InterPredictor.Explicit : H264InterPredictor.Unweighted, header.Refs.Weights, work);
+        _predictor.Bind(picture, pps.WeightedPred ? H264InterPredictor.Explicit : H264InterPredictor.Unweighted, header.Refs.Weights);
         _transform8x8Allowed = pps.Transform8x8;
-        _reconstructor = new(picture, pps, scale);
-        _intra = new(picture, pps, scale, slice, startQp, work.IntraMb);
+        _reconstructor.Bind(picture, pps, scale);
+        _intra.Bind(picture, pps, scale, slice, startQp, _work.IntraMb);
         _slice = slice;
         _qp = startQp;
-        _motion = new(picture, _mb, slice, picture.Field0);
+        _motion.Bind(picture, _mb, slice, picture.Field0);
     }
 
     /// <summary>Decodes the macroblocks of a slice.</summary>

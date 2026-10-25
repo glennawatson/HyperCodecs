@@ -61,14 +61,15 @@ internal static class H264SliceHeaderReader
     /// <param name="rbsp">The payload of the NAL unit, without its header and emulation prevention bytes.</param>
     /// <param name="nalHeader">The NAL unit header byte.</param>
     /// <param name="sets">The parameter sets received so far.</param>
+    /// <param name="header">Receives the header; what it held is replaced.</param>
     /// <param name="sps">Receives the sequence parameter set the slice uses.</param>
     /// <param name="pps">Receives the picture parameter set the slice uses.</param>
     /// <param name="dataBit">Receives the bit index where the slice data starts.</param>
-    /// <returns>The header.</returns>
     /// <exception cref="InvalidDataException">The header is damaged or names a parameter set that was not sent.</exception>
     /// <exception cref="NotSupportedException">The slice is a switching slice.</exception>
-    internal static H264SliceHeader Read(ReadOnlySpan<byte> rbsp, byte nalHeader, H264ParameterSets sets, out H264Sps sps, out H264Pps pps, out long dataBit)
+    internal static void Read(ReadOnlySpan<byte> rbsp, byte nalHeader, H264ParameterSets sets, H264SliceHeader header, out H264Sps sps, out H264Pps pps, out long dataBit)
     {
+        header.Clear();
         var reader = new MsbBitReader(rbsp);
         var isIdr = H264Nal.TypeOf(nalHeader) == H264Nal.IdrSlice;
         var firstMb = (int)ExpGolomb.ReadUe(ref reader);
@@ -81,18 +82,26 @@ internal static class H264SliceHeaderReader
         }
 
         var sliceType = type % SliceTypeRange;
-        var picture = ReadPicture(ref reader, isIdr, sps, pps);
-        var refs = ReadReferences(ref reader, sliceType, sps, pps);
+        header.Picture = ReadPicture(ref reader, isIdr, sps, pps);
+        ReadReferences(ref reader, sliceType, sps, pps, header.Refs);
         var nalRefIdc = H264Nal.ReferenceIdcOf(nalHeader);
-        var marking = nalRefIdc != 0 ? ReadMarking(ref reader, isIdr) : H264Marking.None;
-        var tail = ReadTail(ref reader, sliceType, pps);
+        if (nalRefIdc != 0)
+        {
+            ReadMarking(ref reader, isIdr, header.Marking);
+        }
+
+        header.Tail = ReadTail(ref reader, sliceType, pps);
         if (reader.IsOverrun)
         {
             throw new InvalidDataException("An H.264 slice header is cut short.");
         }
 
         dataBit = reader.BitPosition;
-        return new(nalRefIdc, isIdr, firstMb, sliceType, ppsId, picture, refs, marking, tail);
+        header.NalRefIdc = nalRefIdc;
+        header.IsIdr = isIdr;
+        header.FirstMb = firstMb;
+        header.SliceType = sliceType;
+        header.PpsId = ppsId;
     }
 
     /// <summary>Finds the parameter sets a slice names.</summary>
@@ -155,25 +164,34 @@ internal static class H264SliceHeaderReader
     /// <param name="sliceType">The slice type.</param>
     /// <param name="sps">The sequence parameter set.</param>
     /// <param name="pps">The picture parameter set.</param>
-    /// <returns>What was read.</returns>
+    /// <param name="refs">Receives what was read; it was emptied.</param>
     /// <exception cref="InvalidDataException">The header is damaged.</exception>
-    private static H264RefSetup ReadReferences(ref MsbBitReader reader, int sliceType, H264Sps sps, H264Pps pps)
+    private static void ReadReferences(ref MsbBitReader reader, int sliceType, H264Sps sps, H264Pps pps, H264RefSetup refs)
     {
         var isB = sliceType == H264SliceHeader.B;
         var isIntra = sliceType is H264SliceHeader.I or H264SliceHeader.Si;
-        var direct = isB && reader.ReadBit();
-        var l0 = 0;
-        var l1 = 0;
+        refs.DirectSpatialMvPred = isB && reader.ReadBit();
         if (!isIntra)
         {
-            (l0, l1) = ReadActiveCounts(ref reader, isB, pps);
+            var counts = ReadActiveCounts(ref reader, isB, pps);
+            refs.NumRefIdxL0 = counts.L0;
+            refs.NumRefIdxL1 = counts.L1;
+            ReadModifications(ref reader, refs.ListModificationsL0);
         }
 
-        var modificationsL0 = isIntra ? [] : ReadModifications(ref reader);
-        var modificationsL1 = isB ? ReadModifications(ref reader) : [];
+        if (isB)
+        {
+            ReadModifications(ref reader, refs.ListModificationsL1);
+        }
+
         var weighted = isB ? pps.WeightedBipredIdc == 1 : pps.WeightedPred && !isIntra;
-        var table = weighted ? ReadWeights(ref reader, isB, new(l0, l1), sps.ChromaArrayType) : null;
-        return new(direct, l0, l1, modificationsL0, modificationsL1, table);
+        refs.HasWeights = weighted;
+        if (!weighted)
+        {
+            return;
+        }
+
+        ReadWeights(ref reader, isB, new(refs.NumRefIdxL0, refs.NumRefIdxL1), sps.ChromaArrayType, refs.WeightStorage);
     }
 
     /// <summary>Reads the numbers of pictures in the reference lists, which a slice may change from the picture parameter set's.</summary>
@@ -202,22 +220,21 @@ internal static class H264SliceHeaderReader
 
     /// <summary>Reads the reference list modification of one list.</summary>
     /// <param name="reader">The bits.</param>
-    /// <returns>The operations, which are empty when the list is not modified.</returns>
+    /// <param name="operations">Receives the operations, which stay empty when the list is not modified.</param>
     /// <exception cref="InvalidDataException">The header is damaged.</exception>
-    private static H264RefModification[] ReadModifications(ref MsbBitReader reader)
+    private static void ReadModifications(ref MsbBitReader reader, List<H264RefModification> operations)
     {
         if (!reader.ReadBit())
         {
-            return [];
+            return;
         }
 
-        var operations = new List<H264RefModification>();
         while (true)
         {
             var idc = (int)ExpGolomb.ReadUe(ref reader);
             if (idc == LastModificationIdc)
             {
-                return [.. operations];
+                return;
             }
 
             if (idc > MaxModificationIdc || operations.Count > MaxOperations || reader.IsOverrun)
@@ -234,9 +251,9 @@ internal static class H264SliceHeaderReader
     /// <param name="isB">Whether the slice is a B slice.</param>
     /// <param name="counts">The numbers of pictures in the reference lists.</param>
     /// <param name="chromaArrayType">The type of colour array.</param>
-    /// <returns>The table.</returns>
+    /// <param name="table">Receives the table; it was emptied.</param>
     /// <exception cref="InvalidDataException">The header is damaged.</exception>
-    private static H264WeightTable ReadWeights(ref MsbBitReader reader, bool isB, ReferenceListCounts counts, int chromaArrayType)
+    private static void ReadWeights(ref MsbBitReader reader, bool isB, ReferenceListCounts counts, int chromaArrayType, H264WeightTable table)
     {
         var lumaDenom = (int)ExpGolomb.ReadUe(ref reader);
         var chromaDenom = chromaArrayType != 0 ? (int)ExpGolomb.ReadUe(ref reader) : 0;
@@ -245,32 +262,31 @@ internal static class H264SliceHeaderReader
             throw new InvalidDataException(Damaged);
         }
 
-        var l0 = ReadWeightList(ref reader, counts.L0, lumaDenom, chromaDenom, chromaArrayType);
-        var l1 = isB ? ReadWeightList(ref reader, counts.L1, lumaDenom, chromaDenom, chromaArrayType) : [];
-        return new(lumaDenom, chromaDenom, l0, l1);
+        table.LumaLog2Denom = lumaDenom;
+        table.ChromaLog2Denom = chromaDenom;
+        ReadWeightList(ref reader, counts.L0, new(lumaDenom, chromaDenom, chromaArrayType), table.List0);
+        if (isB)
+        {
+            ReadWeightList(ref reader, counts.L1, new(lumaDenom, chromaDenom, chromaArrayType), table.List1);
+        }
     }
 
     /// <summary>Reads the weights of one reference list.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="count">The pictures in the list.</param>
-    /// <param name="lumaDenom">The log2 of the denominator of the luma weights.</param>
-    /// <param name="chromaDenom">The log2 of the denominator of the chroma weights.</param>
-    /// <param name="chromaArrayType">The type of colour array.</param>
-    /// <returns>The weights.</returns>
-    private static H264Weight[] ReadWeightList(ref MsbBitReader reader, int count, int lumaDenom, int chromaDenom, int chromaArrayType)
+    /// <param name="format">The denominators of the weights and the type of colour array.</param>
+    /// <param name="weights">Receives the weights.</param>
+    private static void ReadWeightList(ref MsbBitReader reader, int count, H264WeightFormat format, List<H264Weight> weights)
     {
-        var weights = new H264Weight[count];
         for (var index = 0; index < count; index++)
         {
             var hasLuma = reader.ReadBit();
-            var lumaWeight = hasLuma ? ExpGolomb.ReadSe(ref reader) : 1 << lumaDenom;
+            var lumaWeight = hasLuma ? ExpGolomb.ReadSe(ref reader) : 1 << format.LumaDenom;
             var lumaOffset = hasLuma ? ExpGolomb.ReadSe(ref reader) : 0;
-            var hasChroma = chromaArrayType != 0 && reader.ReadBit();
-            var chroma = hasChroma ? ReadChromaWeights(ref reader) : H264ChromaWeights.Default(chromaDenom);
-            weights[index] = new(lumaWeight, lumaOffset, chroma.CbWeight, chroma.CbOffset, chroma.CrWeight, chroma.CrOffset, hasLuma, hasChroma);
+            var hasChroma = format.ChromaArrayType != 0 && reader.ReadBit();
+            var chroma = hasChroma ? ReadChromaWeights(ref reader) : H264ChromaWeights.Default(format.ChromaDenom);
+            weights.Add(new(lumaWeight, lumaOffset, chroma.CbWeight, chroma.CbOffset, chroma.CrWeight, chroma.CrOffset, hasLuma, hasChroma));
         }
-
-        return weights;
     }
 
     /// <summary>Reads the chroma weights and offsets of one reference picture.</summary>
@@ -288,27 +304,30 @@ internal static class H264SliceHeaderReader
     /// <summary>Reads the decoded reference picture marking.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="isIdr">Whether the slice is part of an IDR picture.</param>
-    /// <returns>The marking.</returns>
+    /// <param name="marking">Receives the marking, which was emptied.</param>
     /// <exception cref="InvalidDataException">The header is damaged.</exception>
-    private static H264Marking ReadMarking(ref MsbBitReader reader, bool isIdr)
+    private static void ReadMarking(ref MsbBitReader reader, bool isIdr, H264Marking marking)
     {
         if (isIdr)
         {
-            return new(reader.ReadBit(), reader.ReadBit(), false, []);
+            marking.NoOutputOfPriorPics = reader.ReadBit();
+            marking.LongTermReference = reader.ReadBit();
+            return;
         }
 
         if (!reader.ReadBit())
         {
-            return H264Marking.None;
+            return;
         }
 
-        var operations = new List<H264Mmco>();
+        var operations = marking.OperationList;
         while (true)
         {
             var operation = (int)ExpGolomb.ReadUe(ref reader);
             if (operation == EndOfOperations)
             {
-                return new(false, false, true, [.. operations]);
+                marking.Adaptive = true;
+                return;
             }
 
             if (operation > MaxMmco || operations.Count > MaxOperations || reader.IsOverrun)

@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -87,7 +88,7 @@ internal sealed class FlacContainer : MediaContainer
     private readonly long _audioStart;
 
     /// <summary>Bytes read from the file, starting at <see cref="_bufferStart"/>.</summary>
-    private byte[] _buffer = new byte[InitialBufferSize];
+    private byte[] _buffer = ArrayPool<byte>.Shared.Rent(InitialBufferSize);
 
     /// <summary>The file offset of the first byte in the buffer.</summary>
     private long _bufferStart;
@@ -183,10 +184,15 @@ internal sealed class FlacContainer : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!disposing)
         {
-            _stream.Dispose();
+            return;
         }
+
+        ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = [];
+        _bufferLength = 0;
+        _stream.Dispose();
     }
 
     /// <summary>Reads the marker and the metadata blocks.</summary>
@@ -324,7 +330,10 @@ internal sealed class FlacContainer : MediaContainer
 
         if (_buffer.Length - _bufferLength < ReadSize)
         {
-            Array.Resize(ref _buffer, _buffer.Length << 1);
+            var larger = ArrayPool<byte>.Shared.Rent(_buffer.Length << 1);
+            Buffer.BlockCopy(_buffer, 0, larger, 0, _bufferLength);
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = larger;
         }
 
         _stream.Position = _bufferStart + _bufferLength;

@@ -22,9 +22,9 @@ internal static class H265PredWeightReader
     /// <param name="reader">The bits.</param>
     /// <param name="sps">The sequence parameter set.</param>
     /// <param name="listSizes">The pictures in list 0 and list 1; the second is 0 in a P slice.</param>
-    /// <returns>The weights.</returns>
+    /// <param name="weights">Receives the weights; what it held is replaced.</param>
     /// <exception cref="InvalidDataException">A denominator is out of range.</exception>
-    internal static H265PredWeights Read(ref MsbBitReader reader, H265Sps sps, ReferenceListCounts listSizes)
+    internal static void Read(ref MsbBitReader reader, H265Sps sps, ReferenceListCounts listSizes, H265PredWeights weights)
     {
         var lumaDenom = (int)ExpGolomb.ReadUe(ref reader);
         var hasChroma = sps.ChromaArrayType != ChromaSampling.Monochrome;
@@ -36,9 +36,14 @@ internal static class H265PredWeightReader
 
         var halves = new LumaChroma(HalfRange(sps, sps.BitDepthLuma), HalfRange(sps, sps.BitDepthChroma));
         var denoms = new LumaChroma(lumaDenom, chromaDenom);
-        var list0 = ReadList(ref reader, listSizes.L0, hasChroma, denoms, halves);
-        var list1 = listSizes.L1 > 0 ? ReadList(ref reader, listSizes.L1, hasChroma, denoms, halves) : null;
-        return new(lumaDenom, chromaDenom, list0, list1);
+        weights.LumaLog2Denom = lumaDenom;
+        weights.ChromaLog2Denom = chromaDenom;
+        ReadList(ref reader, listSizes.L0, hasChroma, denoms, halves, weights.List0);
+        weights.HasList1 = listSizes.L1 > 0;
+        if (weights.HasList1)
+        {
+            ReadList(ref reader, listSizes.L1, hasChroma, denoms, halves, weights.List1Storage);
+        }
     }
 
     /// <summary>Gets the half range of the offsets (the WpOffsetHalfRange variables).</summary>
@@ -53,11 +58,12 @@ internal static class H265PredWeightReader
     /// <param name="hasChroma">Whether chroma weights are present.</param>
     /// <param name="denoms">The weight denominators.</param>
     /// <param name="halves">The half ranges of the offsets.</param>
-    /// <returns>The weights.</returns>
-    private static H265WeightList ReadList(ref MsbBitReader reader, int count, bool hasChroma, LumaChroma denoms, LumaChroma halves)
+    /// <param name="list">Receives the weights.</param>
+    private static void ReadList(ref MsbBitReader reader, int count, bool hasChroma, LumaChroma denoms, LumaChroma halves, H265WeightList list)
     {
-        var lumaFlags = new bool[count];
-        var chromaFlags = new bool[count];
+        Span<bool> lumaFlags = stackalloc bool[H265WeightList.MaxPictures];
+        Span<bool> chromaFlags = stackalloc bool[H265WeightList.MaxPictures];
+        chromaFlags.Clear();
         for (var i = 0; i < count; i++)
         {
             lumaFlags[i] = reader.ReadBit();
@@ -71,23 +77,18 @@ internal static class H265PredWeightReader
             }
         }
 
-        var lumaWeight = new int[count];
-        var lumaOffset = new int[count];
-        var chromaWeight = new int[count * ChromaComponents];
-        var chromaOffset = new int[count * ChromaComponents];
+        list.Begin(count);
         for (var i = 0; i < count; i++)
         {
-            lumaWeight[i] = 1 << denoms.Luma;
+            list.LumaWeight[i] = 1 << denoms.Luma;
             if (lumaFlags[i])
             {
-                lumaWeight[i] += ExpGolomb.ReadSe(ref reader);
-                lumaOffset[i] = ExpGolomb.ReadSe(ref reader);
+                list.LumaWeight[i] += ExpGolomb.ReadSe(ref reader);
+                list.LumaOffset[i] = ExpGolomb.ReadSe(ref reader);
             }
 
-            ReadChroma(ref reader, chromaFlags[i], i * ChromaComponents, denoms.Chroma, halves.Chroma, chromaWeight, chromaOffset);
+            ReadChroma(ref reader, chromaFlags[i], i * ChromaComponents, denoms.Chroma, halves.Chroma, list.ChromaWeight, list.ChromaOffset);
         }
-
-        return new(lumaWeight, lumaOffset, chromaWeight, chromaOffset);
     }
 
     /// <summary>Reads the chroma weights of one picture (7-58).</summary>

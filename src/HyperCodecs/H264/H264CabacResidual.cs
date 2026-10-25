@@ -2,6 +2,8 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Runtime.CompilerServices;
+
 namespace HyperCodecs.H264;
 
 /// <summary>Reads a block of transform coefficient levels coded with CABAC (clause 7.3.5.3.3 and 9.3.3.1.3 of ITU-T H.264).</summary>
@@ -105,6 +107,7 @@ internal static class H264CabacResidual
     /// <param name="levels">Receives the levels in scan order; the first <paramref name="maxCoefficients"/> are set.</param>
     /// <returns>The number of non-zero levels, 0 when coded_block_flag is 0.</returns>
     /// <exception cref="InvalidDataException">The levels are damaged.</exception>
+    [SkipLocalsInit]
     internal static int Read(ref CabacEngine engine, int category, int flagInc, int maxCoefficients, scoped Span<int> levels)
     {
         levels[..maxCoefficients].Clear();
@@ -124,6 +127,7 @@ internal static class H264CabacResidual
     /// <param name="levels">Receives the 64 levels in scan order.</param>
     /// <returns>The number of non-zero levels.</returns>
     /// <exception cref="InvalidDataException">The levels are damaged.</exception>
+    [SkipLocalsInit]
     internal static int Read8x8(ref CabacEngine engine, scoped Span<int> levels)
     {
         levels[..LargeBlock].Clear();
@@ -170,9 +174,12 @@ internal static class H264CabacResidual
         var significantBase = SignificantBase + SignificantOffset[category];
         var lastBase = LastBase + SignificantOffset[category];
         var count = 0;
+
+        // Chroma DC levels share the contexts of their later positions; every other category has one context for each position.
+        var incLimit = category == ChromaDc ? ChromaDcMaxInc : maxCoefficients;
         for (var index = 0; index < maxCoefficients - 1; index++)
         {
-            var inc = category == ChromaDc ? Math.Min(index, ChromaDcMaxInc) : index;
+            var inc = Math.Min(index, incLimit);
             if (engine.DecodeDecision(significantBase + inc) == 0)
             {
                 continue;

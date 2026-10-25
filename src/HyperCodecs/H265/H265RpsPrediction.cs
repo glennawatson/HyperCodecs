@@ -5,73 +5,87 @@
 namespace HyperCodecs.H265;
 
 /// <summary>Works out a predicted short-term reference picture set from the set it refers to (equations 7-61 and 7-62).</summary>
-/// <param name="Source">The set that is predicted from.</param>
-/// <param name="DeltaRps">The offset added to every distance of the source.</param>
-/// <param name="Used">The used_by_curr_pic_flag of each source entry, then of the offset itself.</param>
-/// <param name="UseDelta">The use_delta_flag of each source entry, then of the offset itself.</param>
-internal readonly record struct H265RpsPrediction(H265ShortTermRps Source, int DeltaRps, bool[] Used, bool[] UseDelta)
+internal readonly ref struct H265RpsPrediction
 {
-    /// <summary>Builds the predicted set.</summary>
-    /// <returns>The set.</returns>
-    internal H265ShortTermRps Derive()
+    /// <summary>The set that is predicted from.</summary>
+    private readonly H265ShortTermRps _source;
+
+    /// <summary>The offset added to every distance of the source.</summary>
+    private readonly int _deltaRps;
+
+    /// <summary>The used_by_curr_pic_flag of each source entry, then of the offset itself.</summary>
+    private readonly ReadOnlySpan<bool> _used;
+
+    /// <summary>The use_delta_flag of each source entry, then of the offset itself.</summary>
+    private readonly ReadOnlySpan<bool> _useDelta;
+
+    /// <summary>Initializes a new instance of the <see cref="H265RpsPrediction"/> struct.</summary>
+    /// <param name="source">The set that is predicted from.</param>
+    /// <param name="deltaRps">The offset added to every distance of the source.</param>
+    /// <param name="used">The used_by_curr_pic_flag of each source entry, then of the offset itself.</param>
+    /// <param name="useDelta">The use_delta_flag of each source entry, then of the offset itself.</param>
+    internal H265RpsPrediction(H265ShortTermRps source, int deltaRps, ReadOnlySpan<bool> used, ReadOnlySpan<bool> useDelta)
     {
-        var negative = new List<int>();
-        var negativeUsed = new List<bool>();
-        var positive = new List<int>();
-        var positiveUsed = new List<bool>();
-        var earlier = Source.DeltaPocS0.Length;
-        var later = Source.DeltaPocS1.Length;
+        _source = source;
+        _deltaRps = deltaRps;
+        _used = used;
+        _useDelta = useDelta;
+    }
+
+    /// <summary>Builds the predicted set.</summary>
+    /// <param name="target">Receives the set; what it held is replaced.</param>
+    /// <exception cref="InvalidDataException">The set is larger than a decoded picture buffer.</exception>
+    internal void Derive(H265ShortTermRps target)
+    {
+        target.Clear();
+        var earlier = _source.EarlierCount;
+        var later = _source.LaterCount;
         var self = earlier + later;
 
         for (var j = later - 1; j >= 0; j--)
         {
-            Add(Source.DeltaPocS1[j] + DeltaRps, earlier + j, negative, negativeUsed, positive, positiveUsed, true);
+            AddEarlier(_source.DeltaPocS1[j] + _deltaRps, earlier + j, target);
         }
 
-        Add(DeltaRps, self, negative, negativeUsed, positive, positiveUsed, true);
+        AddEarlier(_deltaRps, self, target);
         for (var j = 0; j < earlier; j++)
         {
-            Add(Source.DeltaPocS0[j] + DeltaRps, j, negative, negativeUsed, positive, positiveUsed, true);
+            AddEarlier(_source.DeltaPocS0[j] + _deltaRps, j, target);
         }
 
         for (var j = earlier - 1; j >= 0; j--)
         {
-            Add(Source.DeltaPocS0[j] + DeltaRps, j, negative, negativeUsed, positive, positiveUsed, false);
+            AddLater(_source.DeltaPocS0[j] + _deltaRps, j, target);
         }
 
-        Add(DeltaRps, self, negative, negativeUsed, positive, positiveUsed, false);
+        AddLater(_deltaRps, self, target);
         for (var j = 0; j < later; j++)
         {
-            Add(Source.DeltaPocS1[j] + DeltaRps, earlier + j, negative, negativeUsed, positive, positiveUsed, false);
+            AddLater(_source.DeltaPocS1[j] + _deltaRps, earlier + j, target);
         }
-
-        return new([.. negative], [.. negativeUsed], [.. positive], [.. positiveUsed]);
     }
 
-    /// <summary>Adds an entry to one side when it has the right sign and is kept.</summary>
+    /// <summary>Adds an entry to the earlier pictures when it is before the current picture and is kept.</summary>
     /// <param name="distance">The entry's distance after the offset.</param>
     /// <param name="flagIndex">The index of the entry's flags.</param>
-    /// <param name="negative">The earlier pictures.</param>
-    /// <param name="negativeUsed">The used flags of the earlier pictures.</param>
-    /// <param name="positive">The later pictures.</param>
-    /// <param name="positiveUsed">The used flags of the later pictures.</param>
-    /// <param name="forNegative"><see langword="true"/> to add to the earlier pictures, <see langword="false"/> to add to the later pictures.</param>
-    private void Add(int distance, int flagIndex, List<int> negative, List<bool> negativeUsed, List<int> positive, List<bool> positiveUsed, bool forNegative)
+    /// <param name="target">The set being built.</param>
+    private void AddEarlier(int distance, int flagIndex, H265ShortTermRps target)
     {
-        if (!UseDelta[flagIndex])
+        if (_useDelta[flagIndex] && distance < 0)
         {
-            return;
+            target.AddEarlier(distance, _used[flagIndex]);
         }
+    }
 
-        if (forNegative && distance < 0)
+    /// <summary>Adds an entry to the later pictures when it is after the current picture and is kept.</summary>
+    /// <param name="distance">The entry's distance after the offset.</param>
+    /// <param name="flagIndex">The index of the entry's flags.</param>
+    /// <param name="target">The set being built.</param>
+    private void AddLater(int distance, int flagIndex, H265ShortTermRps target)
+    {
+        if (_useDelta[flagIndex] && distance > 0)
         {
-            negative.Add(distance);
-            negativeUsed.Add(Used[flagIndex]);
-        }
-        else if (!forNegative && distance > 0)
-        {
-            positive.Add(distance);
-            positiveUsed.Add(Used[flagIndex]);
+            target.AddLater(distance, _used[flagIndex]);
         }
     }
 }

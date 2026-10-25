@@ -6,27 +6,9 @@ using System.Diagnostics;
 
 namespace HyperCodecs.H264;
 
-/// <summary>What the header of a slice says.</summary>
-/// <param name="NalRefIdc">The reference indication of the NAL unit.</param>
-/// <param name="IsIdr">Whether the slice is part of an IDR picture.</param>
-/// <param name="FirstMb">The number of the first macroblock in the slice.</param>
-/// <param name="SliceType">The slice type, from 0 to 4.</param>
-/// <param name="PpsId">The number of the picture parameter set.</param>
-/// <param name="Picture">The part that names the picture.</param>
-/// <param name="Refs">The part that says which pictures the slice refers to.</param>
-/// <param name="Marking">How the picture marks the reference pictures.</param>
-/// <param name="Tail">The end of the header.</param>
+/// <summary>A slice header. One header is read into again for each slice, so its lists keep their storage and reading a header allocates nothing.</summary>
 [DebuggerDisplay("H264SliceHeader: first {FirstMb}, type {SliceType}, frame {Picture.FrameNum}")]
-internal sealed record H264SliceHeader(
-    int NalRefIdc,
-    bool IsIdr,
-    int FirstMb,
-    int SliceType,
-    int PpsId,
-    H264PictureId Picture,
-    H264RefSetup Refs,
-    H264Marking Marking,
-    H264SliceTail Tail)
+internal sealed class H264SliceHeader
 {
     /// <summary>The slice type of a P slice.</summary>
     internal const int P = 0;
@@ -43,6 +25,33 @@ internal sealed record H264SliceHeader(
     /// <summary>The slice type of an SI slice.</summary>
     internal const int Si = 4;
 
+    /// <summary>Gets or sets the nal_ref_idc of the slice's NAL unit.</summary>
+    internal int NalRefIdc { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the slice is part of an IDR picture.</summary>
+    internal bool IsIdr { get; set; }
+
+    /// <summary>Gets or sets the address of the slice's first macroblock.</summary>
+    internal int FirstMb { get; set; }
+
+    /// <summary>Gets or sets the slice type, 0 to 4.</summary>
+    internal int SliceType { get; set; }
+
+    /// <summary>Gets or sets the number of the picture parameter set the slice uses.</summary>
+    internal int PpsId { get; set; }
+
+    /// <summary>Gets or sets the part of the header that names the picture.</summary>
+    internal H264PictureId Picture { get; set; }
+
+    /// <summary>Gets the part of the header that says which pictures the slice refers to.</summary>
+    internal H264RefSetup Refs { get; } = new();
+
+    /// <summary>Gets how the picture marks the reference pictures.</summary>
+    internal H264Marking Marking { get; } = new();
+
+    /// <summary>Gets or sets the end of the header.</summary>
+    internal H264SliceTail Tail { get; set; }
+
     /// <summary>Gets a value indicating whether the slice is an intra slice.</summary>
     internal bool IsIntra => SliceType is I or Si;
 
@@ -51,4 +60,26 @@ internal sealed record H264SliceHeader(
 
     /// <summary>Gets a value indicating whether the slice is a B slice.</summary>
     internal bool IsB => SliceType == B;
+
+    /// <summary>Makes the header the same as another.</summary>
+    /// <param name="source">The header to copy.</param>
+    internal void CopyFrom(H264SliceHeader source)
+    {
+        NalRefIdc = source.NalRefIdc;
+        IsIdr = source.IsIdr;
+        FirstMb = source.FirstMb;
+        SliceType = source.SliceType;
+        PpsId = source.PpsId;
+        Picture = source.Picture;
+        Tail = source.Tail;
+        Refs.CopyFrom(source.Refs);
+        Marking.CopyFrom(source.Marking);
+    }
+
+    /// <summary>Empties the header's lists, ready to be read into.</summary>
+    internal void Clear()
+    {
+        Refs.Clear();
+        Marking.Clear();
+    }
 }

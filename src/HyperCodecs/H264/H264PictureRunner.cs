@@ -53,11 +53,15 @@ internal static class H264PictureRunner
         }
         else if (pps.Cabac)
         {
-            new H264CabacIntraSliceDecoder(picture, pps, slice.Scale, slice.Number, startQp, work).Decode(rbsp, slice.DataBit, header.FirstMb);
+            var decoder = work.CabacIntra;
+            decoder.Bind(picture, pps, slice.Scale, slice.Number, startQp, work);
+            decoder.Decode(rbsp, slice.DataBit, header.FirstMb);
         }
         else
         {
-            new H264IntraSliceDecoder(picture, pps, slice.Scale, slice.Number, startQp, work.Mb).Decode(rbsp, slice.DataBit, header.FirstMb);
+            var decoder = work.CavlcIntra;
+            decoder.Bind(picture, pps, slice.Scale, slice.Number, startQp, work.Mb);
+            decoder.Decode(rbsp, slice.DataBit, header.FirstMb);
         }
     }
 
@@ -72,24 +76,43 @@ internal static class H264PictureRunner
         var rbsp = slice.Rbsp.AsSpan(0, slice.Length);
         if (header.IsB)
         {
-            var lists = new H264RefLists(slice.List0, slice.List1);
-            if (sets.Pps.Cabac)
-            {
-                new H264CabacBSliceDecoder(picture, sets, slice.Scale, slice.Number, header, lists, work).Decode(rbsp, slice.DataBit, header.FirstMb);
-                return;
-            }
-
-            new H264BSliceDecoder(picture, sets, slice.Scale, slice.Number, header, lists, work).Decode(rbsp, slice.DataBit, header.FirstMb);
+            DecodeBSlice(picture, slice, new(slice.List0, slice.List1), work);
             return;
         }
 
         if (sets.Pps.Cabac)
         {
-            new H264CabacPSliceDecoder(picture, sets.Pps, slice.Scale, slice.Number, header, slice.List0, work).Decode(rbsp, slice.DataBit, header.FirstMb);
+            var decoder = work.CabacP;
+            decoder.Bind(picture, sets.Pps, slice.Scale, slice.Number, header, slice.List0);
+            decoder.Decode(rbsp, slice.DataBit, header.FirstMb);
             return;
         }
 
-        new H264PSliceDecoder(picture, sets.Pps, slice.Scale, slice.Number, header, slice.List0, work).Decode(rbsp, slice.DataBit, header.FirstMb);
+        var cavlc = work.CavlcP;
+        cavlc.Bind(picture, sets.Pps, slice.Scale, slice.Number, header, slice.List0);
+        cavlc.Decode(rbsp, slice.DataBit, header.FirstMb);
+    }
+
+    /// <summary>Decodes a B slice into its picture.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="slice">The slice.</param>
+    /// <param name="lists">The two reference lists.</param>
+    /// <param name="work">The working memory of the thread.</param>
+    private static void DecodeBSlice(H264Picture picture, H264SliceJob slice, H264RefLists lists, H264SliceWork work)
+    {
+        var header = slice.Header;
+        var rbsp = slice.Rbsp.AsSpan(0, slice.Length);
+        if (slice.Sets.Pps.Cabac)
+        {
+            var decoder = work.CabacB;
+            decoder.Bind(picture, slice.Sets, slice.Scale, slice.Number, header, lists);
+            decoder.Decode(rbsp, slice.DataBit, header.FirstMb);
+            return;
+        }
+
+        var cavlc = work.CavlcB;
+        cavlc.Bind(picture, slice.Sets, slice.Scale, slice.Number, header, lists);
+        cavlc.Decode(rbsp, slice.DataBit, header.FirstMb);
     }
 
     /// <summary>Copies the visible part of a decoded picture into a frame.</summary>

@@ -13,4 +13,12 @@ namespace HyperCodecs.H264;
 /// <param name="DeltaPicOrderCntBottom">The offset of the bottom field's picture order count in a frame.</param>
 /// <param name="DeltaPicOrderCnt0">The first offset of the picture order count, for type 1.</param>
 /// <param name="DeltaPicOrderCnt1">The second offset of the picture order count, for type 1.</param>
-internal sealed record H264PictureId(int FrameNum, bool FieldPic, bool BottomField, int IdrPicId, int PicOrderCntLsb, int DeltaPicOrderCntBottom, int DeltaPicOrderCnt0, int DeltaPicOrderCnt1);
+internal readonly record struct H264PictureId(
+    int FrameNum,
+    bool FieldPic,
+    bool BottomField,
+    int IdrPicId,
+    int PicOrderCntLsb,
+    int DeltaPicOrderCntBottom,
+    int DeltaPicOrderCnt0,
+    int DeltaPicOrderCnt1);

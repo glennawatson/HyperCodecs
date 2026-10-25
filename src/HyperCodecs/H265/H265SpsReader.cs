@@ -212,7 +212,9 @@ internal static class H265SpsReader
         var sets = new List<H265ShortTermRps>(count);
         for (var i = 0; i < count; i++)
         {
-            sets.Add(H265ShortTermRpsReader.Read(ref reader, i, count, sets));
+            var set = new H265ShortTermRps();
+            H265ShortTermRpsReader.Read(ref reader, i, count, sets, set);
+            sets.Add(set);
         }
 
         return sets;

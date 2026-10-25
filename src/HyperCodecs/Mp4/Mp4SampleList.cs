@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -21,25 +22,25 @@ internal sealed class Mp4SampleList
     private const int GrowthFactor = 2;
 
     /// <summary>The file offset of each sample.</summary>
-    private long[] _offsets = new long[InitialCapacity];
+    private long[] _offsets = ArrayPool<long>.Shared.Rent(InitialCapacity);
 
     /// <summary>The size of each sample.</summary>
-    private int[] _sizes = new int[InitialCapacity];
+    private int[] _sizes = ArrayPool<int>.Shared.Rent(InitialCapacity);
 
     /// <summary>The track of each sample.</summary>
-    private int[] _tracks = new int[InitialCapacity];
+    private int[] _tracks = ArrayPool<int>.Shared.Rent(InitialCapacity);
 
     /// <summary>Whether decoding can start at each sample.</summary>
-    private bool[] _keys = new bool[InitialCapacity];
+    private bool[] _keys = ArrayPool<bool>.Shared.Rent(InitialCapacity);
 
     /// <summary>When each sample is shown, in seconds.</summary>
-    private double[] _times = new double[InitialCapacity];
+    private double[] _times = ArrayPool<double>.Shared.Rent(InitialCapacity);
 
     /// <summary>When each sample is decoded, in seconds.</summary>
-    private double[] _decodeTimes = new double[InitialCapacity];
+    private double[] _decodeTimes = ArrayPool<double>.Shared.Rent(InitialCapacity);
 
     /// <summary>How long each sample lasts, in seconds.</summary>
-    private double[] _durations = new double[InitialCapacity];
+    private double[] _durations = ArrayPool<double>.Shared.Rent(InitialCapacity);
 
     /// <summary>Gets the number of samples.</summary>
     internal int Count { get; private set; }
@@ -114,20 +115,44 @@ internal sealed class Mp4SampleList
     /// <summary>Puts the samples in the order of their offsets in the file, which is the order they are read in.</summary>
     internal void SortByOffset()
     {
-        var order = new int[Count];
-        for (var index = 0; index < order.Length; index++)
+        var order = ArrayPool<int>.Shared.Rent(Count);
+        var keys = ArrayPool<long>.Shared.Rent(Count);
+        for (var index = 0; index < Count; index++)
         {
             order[index] = index;
+            keys[index] = _offsets[index];
         }
 
-        Array.Sort(_offsets.AsSpan(0, Count).ToArray(), order);
-        _offsets = Permute(_offsets, order);
-        _sizes = Permute(_sizes, order);
-        _tracks = Permute(_tracks, order);
-        _keys = Permute(_keys, order);
-        _times = Permute(_times, order);
-        _decodeTimes = Permute(_decodeTimes, order);
-        _durations = Permute(_durations, order);
+        Array.Sort(keys, order, 0, Count);
+        ArrayPool<long>.Shared.Return(keys);
+        Permute(ref _offsets, order, Count);
+        Permute(ref _sizes, order, Count);
+        Permute(ref _tracks, order, Count);
+        Permute(ref _keys, order, Count);
+        Permute(ref _times, order, Count);
+        Permute(ref _decodeTimes, order, Count);
+        Permute(ref _durations, order, Count);
+        ArrayPool<int>.Shared.Return(order);
+    }
+
+    /// <summary>Gives the arrays back to the pool; the list is not used afterwards.</summary>
+    internal void Release()
+    {
+        ArrayPool<long>.Shared.Return(_offsets);
+        ArrayPool<int>.Shared.Return(_sizes);
+        ArrayPool<int>.Shared.Return(_tracks);
+        ArrayPool<bool>.Shared.Return(_keys);
+        ArrayPool<double>.Shared.Return(_times);
+        ArrayPool<double>.Shared.Return(_decodeTimes);
+        ArrayPool<double>.Shared.Return(_durations);
+        _offsets = [];
+        _sizes = [];
+        _tracks = [];
+        _keys = [];
+        _times = [];
+        _decodeTimes = [];
+        _durations = [];
+        Count = 0;
     }
 
     /// <summary>Finds the first sample at or after a file offset.</summary>
@@ -153,32 +178,45 @@ internal sealed class Mp4SampleList
         return low;
     }
 
-    /// <summary>Makes a copy of an array with its first items put in a new order.</summary>
+    /// <summary>Puts the first items of an array in a new order, using a second array from the pool and giving the first back.</summary>
     /// <typeparam name="T">The item type.</typeparam>
-    /// <param name="source">The array.</param>
-    /// <param name="order">For each place in the result, the item of the source that goes there.</param>
-    /// <returns>The new array.</returns>
-    private static T[] Permute<T>(T[] source, int[] order)
+    /// <param name="array">The array, which is replaced.</param>
+    /// <param name="order">For each place in the result, the item of the array that goes there.</param>
+    /// <param name="count">The items to put in order.</param>
+    private static void Permute<T>(ref T[] array, int[] order, int count)
     {
-        var result = new T[source.Length];
-        for (var index = 0; index < order.Length; index++)
+        var result = ArrayPool<T>.Shared.Rent(array.Length);
+        for (var index = 0; index < count; index++)
         {
-            result[index] = source[order[index]];
+            result[index] = array[order[index]];
         }
 
-        return result;
+        ArrayPool<T>.Shared.Return(array);
+        array = result;
+    }
+
+    /// <summary>Grows an array, using the pool.</summary>
+    /// <typeparam name="T">The item type.</typeparam>
+    /// <param name="array">The array, which is replaced.</param>
+    /// <param name="used">The items to keep.</param>
+    private static void Enlarge<T>(ref T[] array, int used)
+    {
+        var larger = ArrayPool<T>.Shared.Rent(array.Length * GrowthFactor);
+        Array.Copy(array, larger, used);
+        ArrayPool<T>.Shared.Return(array);
+        array = larger;
     }
 
     /// <summary>Makes the arrays bigger.</summary>
     private void Grow()
     {
-        var size = _offsets.Length * GrowthFactor;
-        Array.Resize(ref _offsets, size);
-        Array.Resize(ref _sizes, size);
-        Array.Resize(ref _tracks, size);
-        Array.Resize(ref _keys, size);
-        Array.Resize(ref _times, size);
-        Array.Resize(ref _decodeTimes, size);
-        Array.Resize(ref _durations, size);
+        var used = Count;
+        Enlarge(ref _offsets, used);
+        Enlarge(ref _sizes, used);
+        Enlarge(ref _tracks, used);
+        Enlarge(ref _keys, used);
+        Enlarge(ref _times, used);
+        Enlarge(ref _decodeTimes, used);
+        Enlarge(ref _durations, used);
     }
 }

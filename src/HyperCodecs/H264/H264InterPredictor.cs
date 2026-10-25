@@ -78,31 +78,25 @@ internal sealed class H264InterPredictor
     /// <summary>The largest implicit weight that is used.</summary>
     private const int WeightMax = 128;
 
-    /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
-
-    /// <summary>How predictions are weighted: unweighted, explicit or implicit.</summary>
-    private readonly int _mode;
-
-    /// <summary>The weights the slice sent, or <see langword="null"/>.</summary>
-    private readonly H264WeightTable? _table;
-
     /// <summary>The luma samples predicted from list 1 when a block uses both lists.</summary>
     private readonly byte[] _luma1;
 
     /// <summary>The Cb and Cr samples predicted from list 1, one plane after the other.</summary>
     private readonly byte[] _chroma1;
 
+    /// <summary>The picture being decoded.</summary>
+    private H264Picture _picture = null!;
+
+    /// <summary>How predictions are weighted: unweighted, explicit or implicit.</summary>
+    private int _mode;
+
+    /// <summary>The weights the slice sent, or <see langword="null"/>.</summary>
+    private H264WeightTable? _table;
+
     /// <summary>Initializes a new instance of the <see cref="H264InterPredictor"/> class.</summary>
-    /// <param name="picture">The picture being decoded.</param>
-    /// <param name="mode">How predictions are weighted: <see cref="Unweighted"/>, <see cref="Explicit"/> or <see cref="Implicit"/>.</param>
-    /// <param name="table">The weights the slice sent, used in explicit mode.</param>
     /// <param name="work">The decoder's working memory, which holds the scratch predictions.</param>
-    internal H264InterPredictor(H264Picture picture, int mode, H264WeightTable? table, H264SliceWork work)
+    internal H264InterPredictor(H264SliceWork work)
     {
-        _picture = picture;
-        _mode = mode;
-        _table = table;
         _luma1 = work.Luma1;
         _chroma1 = work.Chroma1;
         Tokens = work.Tokens;
@@ -122,6 +116,17 @@ internal sealed class H264InterPredictor
         var td = Math.Clamp(second - first, -DistanceLimit - 1, DistanceLimit);
         var tx = (ReciprocalNumerator + Math.Abs(td / ChromaRatio)) / td;
         return Math.Clamp(((tb * tx) + ScaleRound) >> ScaleShift, ScaleMin, ScaleMax);
+    }
+
+    /// <summary>Points the predictor at a picture, so one object serves every slice of a worker.</summary>
+    /// <param name="picture">The picture being decoded.</param>
+    /// <param name="mode">How predictions are weighted: <see cref="Unweighted"/>, <see cref="Explicit"/> or <see cref="Implicit"/>.</param>
+    /// <param name="table">The weights the slice sent, used in explicit mode.</param>
+    internal void Bind(H264Picture picture, int mode, H264WeightTable? table)
+    {
+        _picture = picture;
+        _mode = mode;
+        _table = table;
     }
 
     /// <summary>Predicts the samples of a partition into the picture being decoded.</summary>

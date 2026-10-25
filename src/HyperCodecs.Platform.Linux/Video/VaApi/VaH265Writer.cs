@@ -334,7 +334,7 @@ internal static class VaH265Writer
     {
         var lumaOffset = lumaWeight + VaH265Layout.ReferenceListCount;
         var chromaOffset = chromaWeight + (VaH265Layout.ReferenceListCount * ChromaComponents);
-        var count = Math.Min(list.LumaWeight.Length, VaH265Layout.ReferenceListCount);
+        var count = Math.Min(list.Count, VaH265Layout.ReferenceListCount);
         for (var i = 0; i < count; i++)
         {
             block.Set(lumaWeight + i, (sbyte)(list.LumaWeight[i] - (1 << weights.LumaLog2Denom)));

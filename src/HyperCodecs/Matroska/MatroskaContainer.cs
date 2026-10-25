@@ -179,6 +179,7 @@ internal sealed class MatroskaContainer : MediaContainer
 
         if (opened is null)
         {
+            window.Release();
             stream.Position = start;
         }
 
@@ -188,10 +189,13 @@ internal sealed class MatroskaContainer : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!disposing)
         {
-            _stream.Dispose();
+            return;
         }
+
+        _window.Release();
+        _stream.Dispose();
     }
 
     /// <summary>Reads the header, the segment information, the tracks and the cluster positions.</summary>

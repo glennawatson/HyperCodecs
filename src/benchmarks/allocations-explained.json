@@ -1,1 +1,25 @@
-[]
+[
+  { "type": "", "frame": "HyperCodecs.MediaContainers.Open(", "reason": "Opening a file makes its stream and the container the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4Container.ReadSamples(", "reason": "Opening an MP4 file makes the container and its track list; the sample table is pooled." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4Container.Build(", "reason": "Opening an MP4 file makes the container the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4Container.BucketByTrack(", "reason": "The container keeps one index array for each track for the life of the file." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4TopLevel.List(", "reason": "Opening an MP4 file lists its top level boxes once." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4Movie.", "reason": "Reading the movie box makes the track descriptions the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4SampleEntries.", "reason": "Reading a sample entry makes the track and its decoder configuration the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Mp4.Mp4TrackInfo.", "reason": "Copying a track description when the file is opened." },
+  { "type": "", "frame": "HyperCodecs.Ogg.OggContainer.TryOpen", "reason": "Opening an Ogg file makes the container, its track and its stream objects." },
+  { "type": "", "frame": "HyperCodecs.Ogg.OggContainer.ReadVorbisHeaders(", "reason": "The identification and setup packets are kept as the track configuration." },
+  { "type": "", "frame": "HyperCodecs.Ogg.OggContainer..ctor(", "reason": "Opening an Ogg file makes the container the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Ogg.OggPacketReader..ctor(", "reason": "The reader's page table is small; its packet buffer comes from the pool, which allocates when it has none to give." },
+  { "type": "", "frame": "HyperCodecs.Mp3.Mp3Container.", "reason": "Opening an MP3 file makes the container and its track." },
+  { "type": "", "frame": "HyperCodecs.Mp3.Mp3StreamTag.ToConfiguration(", "reason": "The stream tag is kept as the track configuration." },
+  { "type": "", "frame": "HyperCodecs.Aac.AdtsContainer.", "reason": "Opening an ADTS file makes the container, its track and the list of frame offsets." },
+  { "type": "", "frame": "HyperCodecs.Matroska.", "reason": "Opening a Matroska file reads its header, tracks and cluster positions into the container the caller receives." },
+  { "type": "", "frame": "HyperCodecs.Flac.FlacContainer.ReadMetadata(", "reason": "Opening a FLAC file makes the container and its seek points." },
+  { "type": "", "frame": "HyperCodecs.Flac.FlacContainer..ctor(", "reason": "Opening a FLAC file makes the container and its track." },
+  { "type": "", "frame": "HyperCodecs.Flac.FlacContainer.ReadBlock(", "reason": "A metadata block is kept as the track configuration." },
+  { "type": "", "frame": "HyperCodecs.Flac.FlacStreamInfo.Parse(", "reason": "Opening a FLAC file reads its stream information once." },
+  { "type": "", "frame": "HyperCodecs.Containers.WaveContainer.", "reason": "Opening a WAVE file makes the container and its track." },
+  { "type": "", "frame": "HyperCodecs.MediaTrack.<Clone>", "reason": "A container finishes a track description with a copy when the file is opened." },
+  { "type": "", "frame": "HyperCodecs.Benchmarks.", "reason": "The benchmark itself builds the path of the file it opens." }
+]

@@ -14,46 +14,46 @@ internal sealed class H264IntraSliceDecoder
     /// <summary>The largest chroma prediction mode.</summary>
     private const int MaxChromaMode = 3;
 
+    /// <summary>Makes the samples of the macroblocks.</summary>
+    private readonly H264IntraReconstructor _reconstructor = new();
+
     /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
+    private H264Picture _picture = null!;
 
     /// <summary>The picture parameter set.</summary>
-    private readonly H264Pps _pps;
-
-    /// <summary>Makes the samples of the macroblocks.</summary>
-    private readonly H264IntraReconstructor _reconstructor;
+    private H264Pps _pps = null!;
 
     /// <summary>The number of the slice being decoded.</summary>
-    private readonly int _slice;
+    private int _slice;
 
     /// <summary>The macroblock being decoded.</summary>
-    private readonly H264CurrentMb _mb;
+    private H264CurrentMb _mb = null!;
 
     /// <summary>The luma quantiser of the macroblock before.</summary>
     private int _qp;
-
-    /// <summary>Initializes a new instance of the <see cref="H264IntraSliceDecoder"/> class.</summary>
-    /// <param name="picture">The picture to decode into.</param>
-    /// <param name="pps">The picture parameter set.</param>
-    /// <param name="scale">The level scale factors.</param>
-    /// <param name="slice">The number of the slice.</param>
-    /// <param name="startQp">The quantiser the slice starts from.</param>
-    /// <param name="mb">The macroblock to decode into, which the decoder keeps from slice to slice.</param>
-    internal H264IntraSliceDecoder(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264CurrentMb mb)
-    {
-        _mb = mb;
-        _picture = picture;
-        _pps = pps;
-        _reconstructor = new(picture, pps, scale);
-        _slice = slice;
-        _qp = startQp;
-    }
 
     /// <summary>Gets or sets the luma quantiser of the macroblock before.</summary>
     internal int Qp
     {
         get => _qp;
         set => _qp = value;
+    }
+
+    /// <summary>Points the decoder at a slice, so one object serves every slice of a worker.</summary>
+    /// <param name="picture">The picture to decode into.</param>
+    /// <param name="pps">The picture parameter set.</param>
+    /// <param name="scale">The level scale factors.</param>
+    /// <param name="slice">The number of the slice.</param>
+    /// <param name="startQp">The quantiser the slice starts from.</param>
+    /// <param name="mb">The macroblock to decode into, which the decoder keeps from slice to slice.</param>
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264CurrentMb mb)
+    {
+        _mb = mb;
+        _picture = picture;
+        _pps = pps;
+        _reconstructor.Bind(picture, pps, scale);
+        _slice = slice;
+        _qp = startQp;
     }
 
     /// <summary>Decodes the macroblocks of a slice.</summary>

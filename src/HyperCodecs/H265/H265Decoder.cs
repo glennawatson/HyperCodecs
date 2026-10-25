@@ -40,6 +40,9 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>The threads kept for each thread the caller allows to run: pictures that wait for the pictures they refer to sleep, and the others take their place.</summary>
     private const int ThreadsPerToken = 2;
 
+    /// <summary>The pictures the list of spare hardware pictures has room for to begin with: more than a stream keeps, so it does not grow while decoding.</summary>
+    private const int SpareCapacity = 32;
+
     /// <summary>The parameter sets received so far.</summary>
     private readonly H265ParameterSets _sets = new();
 
@@ -61,6 +64,15 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>The slice segments of the picture being decoded, for the hardware.</summary>
     private readonly List<H265HardwareSlice> _hardwareSlices = [];
 
+    /// <summary>The slice segments made for the hardware so far, kept between pictures so keeping a segment makes none.</summary>
+    private readonly List<H265HardwareSlice> _hardwareSliceStore = [];
+
+    /// <summary>What the hardware is given for a picture, filled again for each picture.</summary>
+    private readonly H265HardwarePicture _hardwarePicture = new();
+
+    /// <summary>The pictures that held a hardware surface that has been given back, to be used again once the buffer no longer holds them.</summary>
+    private readonly List<H265Picture> _spareHardware = [with(SpareCapacity)];
+
     /// <summary>The NAL units of the slice segments of the picture being decoded, for the hardware.</summary>
     private readonly ArrayBufferWriter<byte> _hardwareBytes = new();
 
@@ -78,6 +90,12 @@ public sealed class H265Decoder : VideoDecoder
 
     /// <summary>The slice context, made once and started again for each picture.</summary>
     private readonly H265SliceContext _contextStore;
+
+    /// <summary>The header of the last independent slice segment, which dependent segments continue; valid when <see cref="_hasLastIndependent"/> is set.</summary>
+    private readonly H265SliceHeader _lastIndependent = new();
+
+    /// <summary>The header being read, which the decoder reads each segment's header into.</summary>
+    private readonly H265SliceHeader _header = new();
 
     /// <summary>Makes a stand-in for a missing reference of the picture being started; made once so deriving the reference picture set allocates no delegate.</summary>
     private readonly Func<int, H265Picture> _makeMissing;
@@ -109,8 +127,8 @@ public sealed class H265Decoder : VideoDecoder
     /// <summary>The picture parameter set of the picture being started, for <see cref="_makeMissing"/>.</summary>
     private H265Pps? _startPps;
 
-    /// <summary>The header of the last independent slice segment, which dependent segments continue.</summary>
-    private H265SliceHeader? _lastIndependent;
+    /// <summary>Whether <see cref="_lastIndependent"/> holds a header.</summary>
+    private bool _hasLastIndependent;
 
     /// <summary>The layout in use, with the parameter sets it was made from.</summary>
     private H265PictureLayout? _layout;
@@ -189,7 +207,7 @@ public sealed class H265Decoder : VideoDecoder
         AbandonJob();
         _ready.Clear();
         _context = null;
-        _lastIndependent = null;
+        _hasLastIndependent = false;
         _hardwareSlices.Clear();
         _hardwareBytes.ResetWrittenCount();
         _dpb.Clear();
@@ -427,7 +445,8 @@ public sealed class H265Decoder : VideoDecoder
             FinishPicture(output);
         }
 
-        var header = H265SliceHeaderReader.Read(rbsp, type, _sets, _lastIndependent);
+        var header = _header;
+        H265SliceHeaderReader.Read(rbsp, type, _sets, _hasLastIndependent ? _lastIndependent : null, header);
         if (header.Segment.First && !StartPicture(header, type, H265Nal.TemporalIdOf(nal), output))
         {
             return;
@@ -440,7 +459,8 @@ public sealed class H265Decoder : VideoDecoder
 
         if (!header.Segment.Dependent)
         {
-            _lastIndependent = header;
+            _lastIndependent.CopyFrom(header);
+            _hasLastIndependent = true;
         }
 
         _context.Header = header;
@@ -481,7 +501,14 @@ public sealed class H265Decoder : VideoDecoder
     {
         var offset = _hardwareBytes.WrittenCount;
         _hardwareBytes.Write(nal);
-        _hardwareSlices.Add(new(header, [.. context.RefList0], [.. context.RefList1], offset, nal.Length));
+        while (_hardwareSliceStore.Count <= _hardwareSlices.Count)
+        {
+            _hardwareSliceStore.Add(new());
+        }
+
+        var kept = _hardwareSliceStore[_hardwareSlices.Count];
+        kept.Fill(header, context.RefList0, context.RefList1, offset, nal.Length);
+        _hardwareSlices.Add(kept);
     }
 
     /// <summary>Gives the hardware the slices of the finished picture and keeps the frame it returns until the picture is output.</summary>
@@ -491,7 +518,8 @@ public sealed class H265Decoder : VideoDecoder
         var picture = context.Picture;
         var shown = H265FrameConverter.ShownSize(context.Sps);
         var frame = RentFrame(shown.Width, shown.Height, picture.Time);
-        _hardware!.Decode(new(picture, context.Sps, context.Pps, _refSet, _dpb.Pictures, _hardwareSlices, _hardwareBytes.WrittenMemory), frame);
+        _hardwarePicture.Fill(picture, context.Sps, context.Pps, _refSet, _dpb.Pictures, _hardwareSlices, _hardwareBytes.WrittenMemory);
+        _hardware!.Decode(_hardwarePicture, frame);
         picture.OutputFrame = frame;
         _hardwareSlices.Clear();
         _hardwareBytes.ResetWrittenCount();
@@ -508,6 +536,7 @@ public sealed class H265Decoder : VideoDecoder
             }
 
             _hardware!.ReturnSurface(_live[i].Surface);
+            _spareHardware.Add(_live[i]);
             _live.RemoveAt(i);
         }
     }
@@ -748,12 +777,42 @@ public sealed class H265Decoder : VideoDecoder
         return CreateHardwarePicture(sps);
     }
 
+    /// <summary>Takes a picture that gave its surface back and that the buffer no longer holds, made like new.</summary>
+    /// <param name="sps">The sequence parameter set.</param>
+    /// <returns>The picture, or <see langword="null"/> when there is none of the right size.</returns>
+    private H265Picture? TakeSpareHardware(H265Sps sps)
+    {
+        for (var i = _spareHardware.Count - 1; i >= 0; i--)
+        {
+            var candidate = _spareHardware[i];
+            if (candidate.Width != sps.Width || candidate.Height != sps.Height)
+            {
+                _spareHardware.RemoveAt(i);
+                continue;
+            }
+
+            if (_dpb.Pictures.Contains(candidate))
+            {
+                continue;
+            }
+
+            _spareHardware.RemoveAt(i);
+            candidate.Recycle();
+            candidate.IsKept = false;
+            candidate.OutputFrame = null;
+            return candidate;
+        }
+
+        return null;
+    }
+
     /// <summary>Makes a picture whose samples live in a hardware surface.</summary>
     /// <param name="sps">The sequence parameter set.</param>
     /// <returns>The picture.</returns>
     private H265Picture CreateHardwarePicture(H265Sps sps)
     {
-        var picture = new H265Picture(sps) { Surface = _hardware!.RentSurface() };
+        var picture = TakeSpareHardware(sps) ?? new H265Picture(sps);
+        picture.Surface = _hardware!.RentSurface();
         _live.Add(picture);
         return picture;
     }

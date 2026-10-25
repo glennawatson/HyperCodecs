@@ -12,27 +12,30 @@ namespace HyperCodecs.H264;
 internal sealed class H264CavlcInterResidual
 {
     /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
+    private H264Picture _picture = null!;
 
     /// <summary>The macroblock being decoded.</summary>
-    private readonly H264CurrentMb _mb;
+    private H264CurrentMb _mb = null!;
 
     /// <summary>The number of the slice.</summary>
-    private readonly int _slice;
+    private int _slice;
 
     /// <summary>Whether the pictures may use the 8x8 transform.</summary>
-    private readonly bool _transform8x8Allowed;
+    private bool _transform8x8Allowed;
 
     /// <summary>Makes the samples of the macroblocks.</summary>
-    private readonly H264IntraReconstructor _reconstructor;
+    private H264IntraReconstructor _reconstructor = null!;
 
-    /// <summary>Initializes a new instance of the <see cref="H264CavlcInterResidual"/> class.</summary>
+    /// <summary>Gets or sets the luma quantiser of the macroblock before.</summary>
+    internal int Qp { get; set; }
+
+    /// <summary>Points the reader at a slice, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture to decode into.</param>
     /// <param name="mb">The macroblock being decoded.</param>
     /// <param name="slice">The number of the slice.</param>
     /// <param name="reconstructor">Makes the samples of the macroblocks.</param>
     /// <param name="transform8x8Allowed">Whether the pictures may use the 8x8 transform.</param>
-    internal H264CavlcInterResidual(H264Picture picture, H264CurrentMb mb, int slice, H264IntraReconstructor reconstructor, bool transform8x8Allowed)
+    internal void Bind(H264Picture picture, H264CurrentMb mb, int slice, H264IntraReconstructor reconstructor, bool transform8x8Allowed)
     {
         _picture = picture;
         _mb = mb;
@@ -40,9 +43,6 @@ internal sealed class H264CavlcInterResidual
         _reconstructor = reconstructor;
         _transform8x8Allowed = transform8x8Allowed;
     }
-
-    /// <summary>Gets or sets the luma quantiser of the macroblock before.</summary>
-    internal int Qp { get; set; }
 
     /// <summary>Reads the residual of the macroblock whose motion has been read, and adds it to the prediction.</summary>
     /// <param name="reader">The bits.</param>

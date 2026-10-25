@@ -58,7 +58,7 @@ public abstract class VideoDecoder : IDisposable
     /// <summary>Hands back a picture the caller has finished with, so the decoder can fill it again instead of allocating one.</summary>
     /// <param name="frame">The picture.</param>
     /// <remarks>The caller must not use the picture afterwards, and must call this from the thread that decodes.</remarks>
-    public void Recycle(VideoFrame frame)
+    public virtual void Recycle(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (_spare.Count < MaxSpare && frame.Width == Width && frame.Height == Height)

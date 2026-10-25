@@ -36,35 +36,35 @@ internal sealed class H264MotionPrediction
     private const int Half = 2;
 
     /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
+    private H264Picture _picture = null!;
 
     /// <summary>The macroblock being decoded.</summary>
-    private readonly H264CurrentMb _mb;
+    private H264CurrentMb _mb = null!;
 
     /// <summary>The number of the slice.</summary>
-    private readonly int _slice;
+    private int _slice;
 
     /// <summary>The motion of the reference list the vectors are predicted for.</summary>
-    private readonly H264MotionField _field;
-
-    /// <summary>Initializes a new instance of the <see cref="H264MotionPrediction"/> class.</summary>
-    /// <param name="picture">The picture being decoded.</param>
-    /// <param name="mb">The macroblock being decoded, which the caller moves from one macroblock to the next.</param>
-    /// <param name="slice">The number of the slice.</param>
-    /// <param name="field">The motion of the reference list the vectors are predicted for.</param>
-    internal H264MotionPrediction(H264Picture picture, H264CurrentMb mb, int slice, H264MotionField field)
-    {
-        _picture = picture;
-        _mb = mb;
-        _slice = slice;
-        _field = field;
-    }
+    private H264MotionField _field = null!;
 
     /// <summary>Gets which 4x4 blocks of the macroblock have motion already, one bit per block in raster order.</summary>
     internal int DecodedMask { get; private set; }
 
     /// <summary>Gets the neighbour that is not available.</summary>
     private static H264MotionNeighbour Missing { get; } = new(false, -1, 0, 0);
+
+    /// <summary>Points the predictor at a picture and slice, so one object serves every slice of a worker.</summary>
+    /// <param name="picture">The picture being decoded.</param>
+    /// <param name="mb">The macroblock being decoded, which the caller moves from one macroblock to the next.</param>
+    /// <param name="slice">The number of the slice.</param>
+    /// <param name="field">The motion of the reference list the vectors are predicted for.</param>
+    internal void Bind(H264Picture picture, H264CurrentMb mb, int slice, H264MotionField field)
+    {
+        _picture = picture;
+        _mb = mb;
+        _slice = slice;
+        _field = field;
+    }
 
     /// <summary>Starts a macroblock: none of its blocks has motion yet.</summary>
     internal void Begin() => DecodedMask = 0;

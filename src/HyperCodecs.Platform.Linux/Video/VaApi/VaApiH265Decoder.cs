@@ -37,6 +37,9 @@ internal sealed class VaApiH265Decoder : VideoDecoder
     /// <inheritdoc/>
     public override void Reset() => _inner.Reset();
 
+    /// <inheritdoc/>
+    public override void Recycle(VideoFrame frame) => _inner.Recycle(frame);
+
     /// <summary>Makes a decoder for a track.</summary>
     /// <param name="track">The H.265 track.</param>
     /// <param name="failure">Receives why no decoder was made, when none was.</param>

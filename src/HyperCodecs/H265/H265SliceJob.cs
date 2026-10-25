@@ -30,7 +30,7 @@ internal sealed class H265SliceJob
     internal int Length { get; private set; }
 
     /// <summary>Gets the slice segment header.</summary>
-    internal H265SliceHeader Header { get; private set; } = null!;
+    internal H265SliceHeader Header { get; } = new();
 
     /// <summary>Gets the index of the segment's slice in the picture, which <see cref="H265Picture.SliceRefs"/> is indexed by.</summary>
     internal int SliceIndex { get; private set; }
@@ -63,7 +63,7 @@ internal sealed class H265SliceJob
 
         payload.CopyTo(Rbsp);
         Length = payload.Length;
-        Header = header;
+        Header.CopyFrom(header);
         SliceIndex = context.SliceIndex;
         NoBackwardPred = context.NoBackwardPred;
         List0 = Copy(_kept0, context.RefList0, LongTerm0);

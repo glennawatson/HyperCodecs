@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using HyperCodecs.Bits;
 
 namespace HyperCodecs.H264;
@@ -101,57 +102,26 @@ internal sealed class H264CabacIntraSliceDecoder
     /// <summary>The bits of rem_intra4x4_pred_mode.</summary>
     private const int RemModeBits = 3;
 
+    /// <summary>Makes the samples of the macroblocks.</summary>
+    private readonly H264IntraReconstructor _reconstructor = new();
+
     /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
+    private H264Picture _picture = null!;
 
     /// <summary>The picture parameter set.</summary>
-    private readonly H264Pps _pps;
-
-    /// <summary>Makes the samples of the macroblocks.</summary>
-    private readonly H264IntraReconstructor _reconstructor;
+    private H264Pps _pps = null!;
 
     /// <summary>The number of the slice being decoded.</summary>
-    private readonly int _slice;
+    private int _slice;
 
     /// <summary>The macroblock being decoded.</summary>
-    private readonly H264CurrentMb _mb;
+    private H264CurrentMb _mb = null!;
 
     /// <summary>The state of each context.</summary>
-    private readonly byte[] _contexts;
+    private byte[] _contexts = null!;
 
     /// <summary>The luma quantiser of the macroblock before.</summary>
     private int _qp;
-
-    /// <summary>Initializes a new instance of the <see cref="H264CabacIntraSliceDecoder"/> class for an I slice.</summary>
-    /// <param name="picture">The picture to decode into.</param>
-    /// <param name="pps">The picture parameter set.</param>
-    /// <param name="scale">The level scale factors.</param>
-    /// <param name="slice">The number of the slice.</param>
-    /// <param name="startQp">The quantiser the slice starts from.</param>
-    /// <param name="work">The decoder's working memory.</param>
-    internal H264CabacIntraSliceDecoder(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264SliceWork work)
-        : this(picture, pps, scale, slice, startQp, work.Mb, work.Contexts)
-    {
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="H264CabacIntraSliceDecoder"/> class that shares its macroblock and contexts with the decoder of a P slice.</summary>
-    /// <param name="picture">The picture to decode into.</param>
-    /// <param name="pps">The picture parameter set.</param>
-    /// <param name="scale">The level scale factors.</param>
-    /// <param name="slice">The number of the slice.</param>
-    /// <param name="startQp">The quantiser the slice starts from.</param>
-    /// <param name="mb">The macroblock being decoded.</param>
-    /// <param name="contexts">The state of each context.</param>
-    internal H264CabacIntraSliceDecoder(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264CurrentMb mb, byte[] contexts)
-    {
-        _picture = picture;
-        _pps = pps;
-        _reconstructor = new(picture, pps, scale);
-        _slice = slice;
-        _qp = startQp;
-        _mb = mb;
-        _contexts = contexts;
-    }
 
     /// <summary>Gets or sets the luma quantiser of the macroblock before.</summary>
     internal int Qp
@@ -162,6 +132,37 @@ internal sealed class H264CabacIntraSliceDecoder
 
     /// <summary>Gets or sets a value indicating whether the macroblock before had a mb_qp_delta other than zero.</summary>
     internal bool PreviousHadQpDelta { get; set; }
+
+    /// <summary>Points the decoder at an I slice, so one object serves every slice of a worker.</summary>
+    /// <param name="picture">The picture to decode into.</param>
+    /// <param name="pps">The picture parameter set.</param>
+    /// <param name="scale">The level scale factors.</param>
+    /// <param name="slice">The number of the slice.</param>
+    /// <param name="startQp">The quantiser the slice starts from.</param>
+    /// <param name="work">The decoder's working memory.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264SliceWork work) =>
+        Bind(picture, pps, scale, slice, startQp, work.Mb, work.Contexts);
+
+    /// <summary>Points the decoder at a slice that shares its macroblock and contexts with the decoder of a P or B slice.</summary>
+    /// <param name="picture">The picture to decode into.</param>
+    /// <param name="pps">The picture parameter set.</param>
+    /// <param name="scale">The level scale factors.</param>
+    /// <param name="slice">The number of the slice.</param>
+    /// <param name="startQp">The quantiser the slice starts from.</param>
+    /// <param name="mb">The macroblock being decoded.</param>
+    /// <param name="contexts">The state of each context.</param>
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, int startQp, H264CurrentMb mb, byte[] contexts)
+    {
+        _picture = picture;
+        _pps = pps;
+        _reconstructor.Bind(picture, pps, scale);
+        _slice = slice;
+        _qp = startQp;
+        _mb = mb;
+        _contexts = contexts;
+        PreviousHadQpDelta = false;
+    }
 
     /// <summary>Decodes the macroblocks of a slice.</summary>
     /// <param name="rbsp">The payload of the slice's NAL unit.</param>

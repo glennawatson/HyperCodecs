@@ -123,6 +123,7 @@ internal sealed class AdtsContainer : MediaContainer
             || header.RateIndex >= rates.Length
             || header.Channels == 0)
         {
+            window.Release();
             stream.Position = start;
             return null;
         }
@@ -135,10 +136,13 @@ internal sealed class AdtsContainer : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!disposing)
         {
-            _stream.Dispose();
+            return;
         }
+
+        _window.Release();
+        _stream.Dispose();
     }
 
     /// <summary>Builds the decoder's configuration: no samples to skip, then the two byte audio specific config.</summary>

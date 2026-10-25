@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Diagnostics;
 
 namespace HyperCodecs.Containers;
@@ -20,7 +21,7 @@ internal sealed class FileWindow
     private readonly Stream _stream;
 
     /// <summary>The bytes held.</summary>
-    private byte[] _buffer = new byte[ReadSize << 1];
+    private byte[] _buffer = ArrayPool<byte>.Shared.Rent(ReadSize << 1);
 
     /// <summary>The file offset of the first byte held.</summary>
     private long _start;
@@ -55,7 +56,10 @@ internal sealed class FileWindow
         Move(offset);
         if (_buffer.Length < minimum + ReadSize)
         {
-            Array.Resize(ref _buffer, minimum + ReadSize);
+            var larger = ArrayPool<byte>.Shared.Rent(minimum + ReadSize);
+            Buffer.BlockCopy(_buffer, 0, larger, 0, _length);
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = larger;
         }
 
         while (_length < minimum)
@@ -71,6 +75,18 @@ internal sealed class FileWindow
         }
 
         return _buffer.AsSpan(0, _length);
+    }
+
+    /// <summary>Gives the buffer back to the pool; the window is not used afterwards. The stream is not closed.</summary>
+    internal void Release()
+    {
+        var buffer = _buffer;
+        _buffer = [];
+        _length = 0;
+        if (buffer.Length > 0)
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>Makes the window start at an offset, keeping the bytes it already holds from there on.</summary>

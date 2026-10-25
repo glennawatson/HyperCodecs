@@ -67,6 +67,12 @@ public sealed class H264Decoder : VideoDecoder
     /// <summary>Holds decoded frames until they can be output in order.</summary>
     private readonly H264OutputQueue _queue = new();
 
+    /// <summary>The header of the first slice of the picture being decoded, which is valid when <see cref="_hasFirstHeader"/> is set.</summary>
+    private readonly H264SliceHeader _firstHeader = new();
+
+    /// <summary>The header being read, which the decoder reads each slice's header into.</summary>
+    private readonly H264SliceHeader _header = new();
+
     /// <summary>The payload of the NAL unit being decoded.</summary>
     private byte[] _rbsp = new byte[1_024];
 
@@ -79,8 +85,8 @@ public sealed class H264Decoder : VideoDecoder
     /// <summary>When the picture being read is shown, in seconds.</summary>
     private double _time;
 
-    /// <summary>The header of the first slice of the picture being decoded.</summary>
-    private H264SliceHeader? _firstHeader;
+    /// <summary>Whether <see cref="_firstHeader"/> holds the header of the picture being read.</summary>
+    private bool _hasFirstHeader;
 
     /// <summary>The level scale factors of the picture parameter set last used.</summary>
     private H264LevelScale? _scale;
@@ -169,14 +175,14 @@ public sealed class H264Decoder : VideoDecoder
             throw;
         }
 
-        if (_job is { } job && sps is not null && _firstHeader is not null)
+        if (_job is { } job && sps is not null && _hasFirstHeader)
         {
             _job = null;
             Dispatch(job, sps, _firstHeader);
         }
 
         _job = null;
-        _firstHeader = null;
+        _hasFirstHeader = false;
         Drain(output, false);
     }
 
@@ -196,7 +202,7 @@ public sealed class H264Decoder : VideoDecoder
         _ready.Clear();
         _poc.Reset();
         AbandonJob();
-        _firstHeader = null;
+        _hasFirstHeader = false;
         _dpb.Clear();
     }
 
@@ -438,7 +444,8 @@ public sealed class H264Decoder : VideoDecoder
         picture.ChromaQpOffsetCb = sets.Pps.ChromaQpOffset;
         picture.ChromaQpOffsetCr = sets.Pps.SecondChromaQpOffset;
         picture.Poc = _poc.Next(header, sets.Sps);
-        _firstHeader = header;
+        _firstHeader.CopyFrom(header);
+        _hasFirstHeader = true;
         var job = _idleJobs.Count > 0 ? _idleJobs.Pop() : new();
         job.Begin(picture, RentFrame(Width, Height, _time));
         return job;
@@ -474,7 +481,7 @@ public sealed class H264Decoder : VideoDecoder
 
         var limit = sps.MaxNumReorderFrames >= 0 ? sps.MaxNumReorderFrames : sps.DpbFrames;
         _queue.Add(new(picture.Poc, frame), first.IsIdr, limit, _ready);
-        _dpb.Mark(new(picture, first.Picture.FrameNum), first, sps);
+        _dpb.Mark(picture.ReferenceEntry(first.Picture.FrameNum), first, sps);
     }
 
     /// <summary>Moves the frames that are complete from the queue of released frames to the output, in order.</summary>
@@ -562,7 +569,8 @@ public sealed class H264Decoder : VideoDecoder
 
         var length = NalUnits.Unescape(nal, _rbsp, 1);
         var rbsp = _rbsp.AsSpan(0, length);
-        var header = H264SliceHeaderReader.Read(rbsp, nal[0], _sets, out var sps, out var pps, out var dataBit);
+        var header = _header;
+        H264SliceHeaderReader.Read(rbsp, nal[0], _sets, header, out var sps, out var pps, out var dataBit);
         var sets = new H264SliceSets(sps, pps);
         var job = _job ??= BeginJob(header, sets);
         if (_slices >= job.Picture.SliceFilters.Length)

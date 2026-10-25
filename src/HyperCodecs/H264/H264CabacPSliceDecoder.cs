@@ -38,23 +38,14 @@ internal sealed class H264CabacPSliceDecoder
     /// <summary>The largest size of a motion vector difference kept for the contexts.</summary>
     private const int MaxStoredMvd = 255;
 
-    /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
-
-    /// <summary>The frames the slice predicts from, by reference index.</summary>
-    private readonly H264RefPicture[] _refs;
-
     /// <summary>Predicts the samples of inter blocks.</summary>
     private readonly H264InterPredictor _predictor;
 
     /// <summary>Makes the samples of the macroblocks.</summary>
-    private readonly H264IntraReconstructor _reconstructor;
+    private readonly H264IntraReconstructor _reconstructor = new();
 
     /// <summary>Reads the parts of macroblocks that intra and inter macroblocks share.</summary>
-    private readonly H264CabacIntraSliceDecoder _intra;
-
-    /// <summary>The number of the slice being decoded.</summary>
-    private readonly int _slice;
+    private readonly H264CabacIntraSliceDecoder _intra = new();
 
     /// <summary>The macroblock being decoded.</summary>
     private readonly H264CurrentMb _mb;
@@ -63,38 +54,53 @@ internal sealed class H264CabacPSliceDecoder
     private readonly byte[] _contexts;
 
     /// <summary>Predicts motion vectors for the macroblock being decoded.</summary>
-    private readonly H264MotionPrediction _motion;
+    private readonly H264MotionPrediction _motion = new();
+
+    /// <summary>The picture being decoded.</summary>
+    private H264Picture _picture = null!;
+
+    /// <summary>The frames the slice predicts from, by reference index.</summary>
+    private H264RefPicture[] _refs = null!;
+
+    /// <summary>The number of the slice being decoded.</summary>
+    private int _slice;
 
     /// <summary>The slice's cabac_init_idc.</summary>
-    private readonly int _initIdc;
+    private int _initIdc;
 
     /// <summary>The quantiser the slice starts from.</summary>
-    private readonly int _startQp;
+    private int _startQp;
 
     /// <summary>Whether every partition of the macroblock being decoded is at least 8x8, so it may use the 8x8 transform.</summary>
     private bool _allow8x8;
 
     /// <summary>Initializes a new instance of the <see cref="H264CabacPSliceDecoder"/> class.</summary>
+    /// <param name="work">The decoder's working memory.</param>
+    internal H264CabacPSliceDecoder(H264SliceWork work)
+    {
+        _mb = work.Mb;
+        _contexts = work.Contexts;
+        _predictor = new(work);
+    }
+
+    /// <summary>Points the decoder at a P slice, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture to decode into.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="scale">The level scale factors.</param>
     /// <param name="slice">The number of the slice.</param>
     /// <param name="header">The slice header, which gives the starting quantiser, the context table and the weights.</param>
     /// <param name="refs">Reference list 0.</param>
-    /// <param name="work">The decoder's working memory.</param>
-    internal H264CabacPSliceDecoder(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, H264SliceHeader header, H264RefPicture[] refs, H264SliceWork work)
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale, int slice, H264SliceHeader header, H264RefPicture[] refs)
     {
-        _mb = work.Mb;
-        _contexts = work.Contexts;
         _startQp = pps.PicInitQp + header.Tail.QpDelta;
         _picture = picture;
         _refs = refs;
-        _predictor = new(picture, pps.WeightedPred ? H264InterPredictor.Explicit : H264InterPredictor.Unweighted, header.Refs.Weights, work);
-        _reconstructor = new(picture, pps, scale);
-        _intra = new(picture, pps, scale, slice, _startQp, _mb, _contexts);
+        _predictor.Bind(picture, pps.WeightedPred ? H264InterPredictor.Explicit : H264InterPredictor.Unweighted, header.Refs.Weights);
+        _reconstructor.Bind(picture, pps, scale);
+        _intra.Bind(picture, pps, scale, slice, _startQp, _mb, _contexts);
         _slice = slice;
         _initIdc = header.Tail.CabacInitIdc;
-        _motion = new(picture, _mb, slice, picture.Field0);
+        _motion.Bind(picture, _mb, slice, picture.Field0);
     }
 
     /// <summary>Decodes the macroblocks of a slice.</summary>

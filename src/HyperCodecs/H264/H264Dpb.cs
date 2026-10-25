@@ -37,6 +37,9 @@ internal sealed class H264Dpb
     /// <summary>The memory management operation that makes the current frame a long-term one.</summary>
     private const int MmcoCurrentToLong = 6;
 
+    /// <summary>The list lengths that have cached arrays: a list holds up to 32 pictures and its working array one more.</summary>
+    private const int CachedLengths = 34;
+
     /// <summary>The frames marked as used for reference, short-term and long-term.</summary>
     private readonly List<H264RefPicture> _frames = [];
 
@@ -55,20 +58,20 @@ internal sealed class H264Dpb
     /// <summary>The initial list 1.</summary>
     private readonly List<H264RefPicture> _initial1 = [];
 
+    /// <summary>The working arrays of list 0, by length, so a slice with a list of a length seen before makes none.</summary>
+    private readonly H264RefPicture?[]?[] _work0 = new H264RefPicture?[]?[CachedLengths];
+
+    /// <summary>The working arrays of list 1, by length.</summary>
+    private readonly H264RefPicture?[]?[] _work1 = new H264RefPicture?[]?[CachedLengths];
+
+    /// <summary>The finished lists 0, by length.</summary>
+    private readonly H264RefPicture[]?[] _result0 = new H264RefPicture[]?[CachedLengths];
+
+    /// <summary>The finished lists 1, by length.</summary>
+    private readonly H264RefPicture[]?[] _result1 = new H264RefPicture[]?[CachedLengths];
+
     /// <summary>The largest long-term frame index, or -1 when there are no long-term indices.</summary>
     private int _maxLongTermFrameIdx = -1;
-
-    /// <summary>The working array of list 0.</summary>
-    private H264RefPicture?[]? _work0;
-
-    /// <summary>The working array of list 1.</summary>
-    private H264RefPicture?[]? _work1;
-
-    /// <summary>The finished list 0.</summary>
-    private H264RefPicture[]? _result0;
-
-    /// <summary>The finished list 1.</summary>
-    private H264RefPicture[]? _result1;
 
     /// <summary>Gets the number of reference frames.</summary>
     internal int Count => _frames.Count;
@@ -133,9 +136,9 @@ internal sealed class H264Dpb
 
         longTerm.Sort(static (a, b) => a.LongTermFrameIdx.CompareTo(b.LongTermFrameIdx));
         initial.AddRange(longTerm);
-        var list = FillList(ref _work0, initial, count);
+        var list = FillList(_work0, initial, count);
         Modify(list, header.Refs.ModificationsL0, count, currentFrameNum, maxFrameNum);
-        return Complete(ref _result0, list, count);
+        return Complete(_result0, list, count);
     }
 
     /// <summary>Builds both reference lists of a B slice from picture order counts (clause 8.2.4.2.3).</summary>
@@ -193,11 +196,11 @@ internal sealed class H264Dpb
 
         var count0 = header.Refs.NumRefIdxL0;
         var count1 = header.Refs.NumRefIdxL1;
-        var list0 = FillList(ref _work0, initial0, count0);
-        var list1 = FillList(ref _work1, initial1, count1);
+        var list0 = FillList(_work0, initial0, count0);
+        var list1 = FillList(_work1, initial1, count1);
         Modify(list0, header.Refs.ModificationsL0, count0, currentFrameNum, maxFrameNum);
         Modify(list1, header.Refs.ModificationsL1, count1, currentFrameNum, maxFrameNum);
-        return new(Complete(ref _result0, list0, count0), Complete(ref _result1, list1, count1));
+        return new(Complete(_result0, list0, count0), Complete(_result1, list1, count1));
     }
 
     /// <summary>Marks the frame just decoded and adds it to the reference frames when it is a reference (clause 8.2.5).</summary>
@@ -238,14 +241,21 @@ internal sealed class H264Dpb
         _frames.Add(current);
     }
 
+    /// <summary>Gets the array of a length kept from earlier slices, making it the first time that length is asked for.</summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="cache">The arrays kept so far, by length.</param>
+    /// <param name="length">The length.</param>
+    /// <returns>The array.</returns>
+    private static T[] Cached<T>(T[]?[] cache, int length) => length < cache.Length ? cache[length] ??= new T[length] : new T[length];
+
     /// <summary>Copies the start of an initial list into a list one place longer than the slice says.</summary>
-    /// <param name="cache">The array kept from the last slice, which is used again when it is the right length.</param>
+    /// <param name="cache">The arrays kept from earlier slices, by length, one of which is used again when it is the right length.</param>
     /// <param name="initial">The initial list.</param>
     /// <param name="count">The length the slice asks for.</param>
     /// <returns>The list, with a spare place at the end for the modification commands.</returns>
-    private static H264RefPicture?[] FillList(ref H264RefPicture?[]? cache, List<H264RefPicture> initial, int count)
+    private static H264RefPicture?[] FillList(H264RefPicture?[]?[] cache, List<H264RefPicture> initial, int count)
     {
-        var list = cache is { } kept && kept.Length == count + 1 ? kept : (cache = new H264RefPicture?[count + 1]);
+        var list = Cached(cache, count + 1);
         Array.Clear(list);
         for (var index = 0; index < Math.Min(count, initial.Count); index++)
         {
@@ -321,15 +331,15 @@ internal sealed class H264Dpb
     }
 
     /// <summary>Takes the finished list, filling places that no frame reaches.</summary>
-    /// <param name="cache">The array kept from the last slice, which is used again when it is the right length. The slice decoder only holds the result while it decodes the slice.</param>
+    /// <param name="cache">The arrays kept from earlier slices, by length. The slice decoder only holds the result while it decodes the slice.</param>
     /// <param name="list">The list, one place longer than <paramref name="count"/>.</param>
     /// <param name="count">The length of the list.</param>
     /// <returns>The list.</returns>
     /// <exception cref="InvalidDataException">There is no frame at all to refer to.</exception>
-    private static H264RefPicture[] Complete(ref H264RefPicture[]? cache, H264RefPicture?[] list, int count)
+    private static H264RefPicture[] Complete(H264RefPicture[]?[] cache, H264RefPicture?[] list, int count)
     {
         var first = list[0] ?? throw new InvalidDataException("An H.264 inter slice has no reference frame.");
-        var result = cache is { } kept && kept.Length == count ? kept : (cache = new H264RefPicture[count]);
+        var result = Cached(cache, count);
         for (var index = 0; index < count; index++)
         {
             result[index] = list[index] ?? first;
@@ -377,7 +387,7 @@ internal sealed class H264Dpb
     /// <param name="current">The frame just decoded.</param>
     /// <param name="operations">The operations.</param>
     /// <param name="currentFrameNum">The frame_num of the frame just decoded.</param>
-    private void ApplyOperations(H264RefPicture current, H264Mmco[] operations, int currentFrameNum)
+    private void ApplyOperations(H264RefPicture current, ReadOnlySpan<H264Mmco> operations, int currentFrameNum)
     {
         foreach (var operation in operations)
         {
@@ -391,7 +401,7 @@ internal sealed class H264Dpb
 
                 case MmcoLongToUnused:
                 {
-                    _ = _frames.RemoveAll(frame => frame.IsLongTerm && frame.LongTermFrameIdx == operation.LongTermPicNum);
+                    RemoveLongTerm(operation.LongTermPicNum, null);
                     break;
                 }
 
@@ -405,7 +415,7 @@ internal sealed class H264Dpb
                 case MmcoMaxLongTerm:
                 {
                     _maxLongTermFrameIdx = operation.LongTermFrameIdx - 1;
-                    _ = _frames.RemoveAll(frame => frame.IsLongTerm && frame.LongTermFrameIdx > _maxLongTermFrameIdx);
+                    RemoveLongTermAbove(_maxLongTermFrameIdx);
                     break;
                 }
 
@@ -453,9 +463,37 @@ internal sealed class H264Dpb
     /// <param name="index">The long-term frame index.</param>
     private void AssignLongTerm(H264RefPicture frame, int index)
     {
-        _ = _frames.RemoveAll(other => other.IsLongTerm && other.LongTermFrameIdx == index && !ReferenceEquals(other, frame));
+        RemoveLongTerm(index, frame);
         frame.IsLongTerm = true;
         frame.LongTermFrameIdx = index;
+    }
+
+    /// <summary>Forgets the long-term frames that have an index.</summary>
+    /// <param name="index">The long-term frame index.</param>
+    /// <param name="keep">A frame to keep even if it has the index, or <see langword="null"/>.</param>
+    private void RemoveLongTerm(int index, H264RefPicture? keep)
+    {
+        for (var place = _frames.Count - 1; place >= 0; place--)
+        {
+            var frame = _frames[place];
+            if (frame.IsLongTerm && frame.LongTermFrameIdx == index && !ReferenceEquals(frame, keep))
+            {
+                _frames.RemoveAt(place);
+            }
+        }
+    }
+
+    /// <summary>Forgets the long-term frames whose index is above a limit.</summary>
+    /// <param name="limit">The largest long-term frame index that stays.</param>
+    private void RemoveLongTermAbove(int limit)
+    {
+        for (var place = _frames.Count - 1; place >= 0; place--)
+        {
+            if (_frames[place].IsLongTerm && _frames[place].LongTermFrameIdx > limit)
+            {
+                _frames.RemoveAt(place);
+            }
+        }
     }
 
     /// <summary>Applies the reference list modification commands of a slice (clause 8.2.4.3).</summary>
@@ -465,7 +503,7 @@ internal sealed class H264Dpb
     /// <param name="currentFrameNum">The frame_num of the frame being decoded.</param>
     /// <param name="maxFrameNum">The range of frame numbers.</param>
     /// <exception cref="InvalidDataException">A command names a frame that is not there.</exception>
-    private void Modify(H264RefPicture?[] list, H264RefModification[] commands, int count, int currentFrameNum, int maxFrameNum)
+    private void Modify(H264RefPicture?[] list, ReadOnlySpan<H264RefModification> commands, int count, int currentFrameNum, int maxFrameNum)
     {
         var predicted = currentFrameNum;
         var index = 0;

@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 
@@ -120,10 +121,13 @@ internal sealed class Mp4Container : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (!disposing)
         {
-            _stream.Dispose();
+            return;
         }
+
+        _samples.Release();
+        _stream.Dispose();
     }
 
     /// <summary>Opens a stream, which is left wherever it ends up when the file is not one this reader plays.</summary>
@@ -160,6 +164,30 @@ internal sealed class Mp4Container : MediaContainer
         }
 
         var samples = new Mp4SampleList();
+        var opened = false;
+        try
+        {
+            var container = ReadSamples(stream, boxes, in movie, samples);
+            opened = container is not null;
+            return container;
+        }
+        finally
+        {
+            if (!opened)
+            {
+                samples.Release();
+            }
+        }
+    }
+
+    /// <summary>Reads the samples and tracks of a file's movie and fragments into a sample list.</summary>
+    /// <param name="stream">The file.</param>
+    /// <param name="boxes">The top level boxes.</param>
+    /// <param name="movie">The movie box.</param>
+    /// <param name="samples">Receives the samples.</param>
+    /// <returns>The container, which keeps the sample list, or <see langword="null"/> when the file has no track or sample this reader plays.</returns>
+    private static Mp4Container? ReadSamples(Stream stream, List<Mp4TopBox> boxes, in Mp4TopBox movie, Mp4SampleList samples)
+    {
         var infos = new List<Mp4TrackInfo>();
         var seconds = ReadBox(stream, movie, MaxMovieBytes, samples, infos, null);
         if (infos.Count == 0)
@@ -207,23 +235,32 @@ internal sealed class Mp4Container : MediaContainer
             throw new InvalidDataException("A box of the file is too big.");
         }
 
-        var bytes = new byte[(int)box.Size];
-        stream.Position = box.Offset;
-        stream.ReadExactly(bytes);
-        var position = 0;
-        if (!Mp4Boxes.Next(bytes, ref position, bytes.Length, out var inner))
+        var size = (int)box.Size;
+        var bytes = ArrayPool<byte>.Shared.Rent(size);
+        try
         {
-            throw new InvalidDataException("A box of the file is damaged.");
-        }
+            stream.Position = box.Offset;
+            stream.ReadExactly(bytes, 0, size);
+            var view = bytes.AsSpan(0, size);
+            var position = 0;
+            if (!Mp4Boxes.Next(view, ref position, size, out var inner))
+            {
+                throw new InvalidDataException("A box of the file is damaged.");
+            }
 
-        var content = bytes.AsSpan(inner.Start, inner.End - inner.Start);
-        if (nextDecode is null)
+            var content = view.Slice(inner.Start, inner.End - inner.Start);
+            if (nextDecode is null)
+            {
+                return Mp4Movie.Read(content, samples, infos);
+            }
+
+            Mp4Fragments.Add(content, box.Offset, infos, nextDecode, samples);
+            return 0;
+        }
+        finally
         {
-            return Mp4Movie.Read(content, samples, infos);
+            ArrayPool<byte>.Shared.Return(bytes);
         }
-
-        Mp4Fragments.Add(content, box.Offset, infos, nextDecode, samples);
-        return 0;
     }
 
     /// <summary>Tells whether a box type can start an ISO base media file.</summary>

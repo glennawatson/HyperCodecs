@@ -32,29 +32,29 @@ internal sealed class H264BMotion
     /// <summary>The shift of the temporal direct scale.</summary>
     private const int ScaleShift = 8;
 
-    /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
-
-    /// <summary>The macroblock being decoded.</summary>
-    private readonly H264CurrentMb _mb;
-
-    /// <summary>The two reference lists.</summary>
-    private readonly H264RefLists _lists;
-
-    /// <summary>Whether direct prediction works from neighbours (spatial) rather than from the co-located picture (temporal).</summary>
-    private readonly bool _spatial;
-
-    /// <summary>Whether direct prediction works on 8x8 blocks, taking the motion of the macroblock's corners.</summary>
-    private readonly bool _inference;
-
     /// <summary>Predicts vectors for list 0.</summary>
-    private readonly H264MotionPrediction _predict0;
+    private readonly H264MotionPrediction _predict0 = new();
 
     /// <summary>Predicts vectors for list 1.</summary>
-    private readonly H264MotionPrediction _predict1;
+    private readonly H264MotionPrediction _predict1 = new();
+
+    /// <summary>The picture being decoded.</summary>
+    private H264Picture _picture = null!;
+
+    /// <summary>The macroblock being decoded.</summary>
+    private H264CurrentMb _mb = null!;
+
+    /// <summary>The two reference lists.</summary>
+    private H264RefLists _lists;
+
+    /// <summary>Whether direct prediction works from neighbours (spatial) rather than from the co-located picture (temporal).</summary>
+    private bool _spatial;
+
+    /// <summary>Whether direct prediction works on 8x8 blocks, taking the motion of the macroblock's corners.</summary>
+    private bool _inference;
 
     /// <summary>Predicts samples.</summary>
-    private readonly H264InterPredictor _predictor;
+    private H264InterPredictor _predictor = null!;
 
     /// <summary>The reference indices and vectors spatial direct prediction found for the macroblock.</summary>
     private H264DirectBlock _spatialMotion;
@@ -62,14 +62,14 @@ internal sealed class H264BMotion
     /// <summary>Whether <see cref="_spatialMotion"/> has been worked out for the macroblock.</summary>
     private bool _directReady;
 
-    /// <summary>Initializes a new instance of the <see cref="H264BMotion"/> class.</summary>
+    /// <summary>Points the motion at a picture and slice, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture being decoded.</param>
     /// <param name="mb">The macroblock being decoded.</param>
     /// <param name="slice">The number of the slice.</param>
     /// <param name="lists">The two reference lists.</param>
     /// <param name="predictor">Predicts samples.</param>
     /// <param name="flags">Whether direct prediction is spatial and whether it works on 8x8 blocks.</param>
-    internal H264BMotion(H264Picture picture, H264CurrentMb mb, int slice, H264RefLists lists, H264InterPredictor predictor, H264DirectFlags flags)
+    internal void Bind(H264Picture picture, H264CurrentMb mb, int slice, H264RefLists lists, H264InterPredictor predictor, H264DirectFlags flags)
     {
         _picture = picture;
         _mb = mb;
@@ -77,8 +77,8 @@ internal sealed class H264BMotion
         _predictor = predictor;
         _spatial = flags.Spatial;
         _inference = flags.Inference;
-        _predict0 = new(picture, mb, slice, picture.Field0);
-        _predict1 = new(picture, mb, slice, picture.Field1);
+        _predict0.Bind(picture, mb, slice, picture.Field0);
+        _predict1.Bind(picture, mb, slice, picture.Field1);
     }
 
     /// <summary>Starts a macroblock: none of its blocks has motion yet.</summary>

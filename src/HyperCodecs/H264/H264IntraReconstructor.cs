@@ -26,19 +26,19 @@ internal sealed class H264IntraReconstructor
     private const int GroupSide = 2;
 
     /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
+    private H264Picture _picture = null!;
 
     /// <summary>The picture parameter set.</summary>
-    private readonly H264Pps _pps;
+    private H264Pps _pps = null!;
 
     /// <summary>The level scale factors.</summary>
-    private readonly H264LevelScale _scale;
+    private H264LevelScale _scale = null!;
 
-    /// <summary>Initializes a new instance of the <see cref="H264IntraReconstructor"/> class.</summary>
+    /// <summary>Points the reconstructor at a picture, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="scale">The level scale factors.</param>
-    internal H264IntraReconstructor(H264Picture picture, H264Pps pps, H264LevelScale scale)
+    internal void Bind(H264Picture picture, H264Pps pps, H264LevelScale scale)
     {
         _picture = picture;
         _pps = pps;

@@ -47,52 +47,69 @@ internal sealed class H264BSliceDecoder
     /// <summary>The largest mb_type of a B slice, counting the intra types.</summary>
     private const int MaxMbType = 48;
 
-    /// <summary>The picture being decoded.</summary>
-    private readonly H264Picture _picture;
-
-    /// <summary>The two reference lists.</summary>
-    private readonly H264RefLists _lists;
-
     /// <summary>Reads the intra macroblocks of the slice.</summary>
-    private readonly H264IntraSliceDecoder _intra;
+    private readonly H264IntraSliceDecoder _intra = new();
 
     /// <summary>Reads the residual of inter macroblocks.</summary>
-    private readonly H264CavlcInterResidual _residual;
+    private readonly H264CavlcInterResidual _residual = new();
 
-    /// <summary>The number of the slice being decoded.</summary>
-    private readonly int _slice;
+    /// <summary>Makes the samples of the inter macroblocks.</summary>
+    private readonly H264IntraReconstructor _reconstructor = new();
 
     /// <summary>The macroblock being decoded.</summary>
     private readonly H264CurrentMb _mb;
 
+    /// <summary>The work area that holds the macroblock the intra decoder works on.</summary>
+    private readonly H264SliceWork _work;
+
+    /// <summary>Predicts the samples of inter blocks.</summary>
+    private readonly H264InterPredictor _predictor;
+
     /// <summary>Keeps the motion of the macroblock being decoded.</summary>
-    private readonly H264BMotion _motion;
+    private readonly H264BMotion _motion = new();
+
+    /// <summary>The picture being decoded.</summary>
+    private H264Picture _picture = null!;
+
+    /// <summary>The two reference lists.</summary>
+    private H264RefLists _lists;
+
+    /// <summary>The number of the slice being decoded.</summary>
+    private int _slice;
 
     /// <summary>Whether direct prediction works on 8x8 blocks.</summary>
-    private readonly bool _inference;
+    private bool _inference;
 
     /// <summary>Whether every partition of the macroblock being decoded is at least 8x8, so it may use the 8x8 transform.</summary>
     private bool _allow8x8;
 
     /// <summary>Initializes a new instance of the <see cref="H264BSliceDecoder"/> class.</summary>
+    /// <param name="work">The decoder's working memory.</param>
+    internal H264BSliceDecoder(H264SliceWork work)
+    {
+        _mb = work.Mb;
+        _work = work;
+        _predictor = new(work);
+    }
+
+    /// <summary>Points the decoder at a B slice, so one object serves every slice of a worker.</summary>
     /// <param name="picture">The picture to decode into.</param>
     /// <param name="sets">The sequence and picture parameter sets.</param>
     /// <param name="scale">The level scale factors.</param>
     /// <param name="slice">The number of the slice.</param>
     /// <param name="header">The slice header, which gives the starting quantiser, the weights and the direct mode.</param>
     /// <param name="lists">The two reference lists.</param>
-    /// <param name="work">The decoder's working memory.</param>
-    internal H264BSliceDecoder(H264Picture picture, H264SliceSets sets, H264LevelScale scale, int slice, H264SliceHeader header, H264RefLists lists, H264SliceWork work)
+    internal void Bind(H264Picture picture, H264SliceSets sets, H264LevelScale scale, int slice, H264SliceHeader header, H264RefLists lists)
     {
         var (sps, pps) = sets;
         var startQp = pps.PicInitQp + header.Tail.QpDelta;
-        _mb = work.Mb;
         _picture = picture;
         _lists = lists;
         _inference = sps.Direct8x8Inference;
-        var reconstructor = new H264IntraReconstructor(picture, pps, scale);
-        _intra = new(picture, pps, scale, slice, startQp, work.IntraMb);
-        _residual = new(picture, _mb, slice, reconstructor, pps.Transform8x8) { Qp = startQp };
+        _reconstructor.Bind(picture, pps, scale);
+        _intra.Bind(picture, pps, scale, slice, startQp, _work.IntraMb);
+        _residual.Bind(picture, _mb, slice, _reconstructor, pps.Transform8x8);
+        _residual.Qp = startQp;
         _slice = slice;
         var mode = pps.WeightedBipredIdc switch
         {
@@ -100,7 +117,8 @@ internal sealed class H264BSliceDecoder
             ImplicitWeights => H264InterPredictor.Implicit,
             _ => H264InterPredictor.Unweighted,
         };
-        _motion = new(picture, _mb, slice, lists, new(picture, mode, header.Refs.Weights, work), new(header.Refs.DirectSpatialMvPred, sps.Direct8x8Inference));
+        _predictor.Bind(picture, mode, header.Refs.Weights);
+        _motion.Bind(picture, _mb, slice, lists, _predictor, new(header.Refs.DirectSpatialMvPred, sps.Direct8x8Inference));
     }
 
     /// <summary>Decodes the macroblocks of a slice.</summary>

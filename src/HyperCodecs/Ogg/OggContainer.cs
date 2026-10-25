@@ -123,6 +123,8 @@ internal sealed class OggContainer : MediaContainer
         var headers = ReadVorbisHeaders(reader);
         if (headers is null)
         {
+            reader.Dispose();
+            window.Release();
             stream.Position = start;
             return TryOpenOpus(stream);
         }
@@ -145,7 +147,14 @@ internal sealed class OggContainer : MediaContainer
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        // The window does not own the stream; the container does, through it.
+        // The window does not own the stream; the container does, through it. The window and reader give their buffers back to the pool.
+        if (!disposing)
+        {
+            return;
+        }
+
+        _reader.Dispose();
+        _window.Release();
     }
 
     /// <summary>Opens a stream as an Ogg file holding Opus.</summary>
@@ -158,6 +167,8 @@ internal sealed class OggContainer : MediaContainer
         var reader = new OggPacketReader(window, start);
         if (!reader.ReadPacket() || !OpusHead.TryRead(reader.Packet, out var head) || !reader.ReadPacket() || !reader.Packet.StartsWith("OpusTags"u8))
         {
+            reader.Dispose();
+            window.Release();
             stream.Position = start;
             return null;
         }

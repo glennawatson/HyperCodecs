@@ -233,11 +233,11 @@ internal sealed unsafe class VaApiH265Hardware : IH265Hardware, IDisposable
     /// <param name="block">The slice parameter buffer.</param>
     /// <param name="offset">Where the list is.</param>
     /// <param name="list">The pictures of the list.</param>
-    private void WriteReferenceList(VaBlock block, int offset, H265Picture[] list)
+    private void WriteReferenceList(VaBlock block, int offset, List<H265Picture> list)
     {
         for (var i = 0; i < VaH265Layout.ReferenceListCount; i++)
         {
-            var index = i < list.Length ? _references.IndexOf(list[i]) : -1;
+            var index = i < list.Count ? _references.IndexOf(list[i]) : -1;
             block.Set(offset + i, index >= 0 ? (byte)index : VaH265Writer.NoReference);
         }
     }

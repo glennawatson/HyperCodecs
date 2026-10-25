@@ -35,6 +35,16 @@ internal sealed class H264RefPicture
     /// <summary>Gets or sets the long-term frame index when the frame is a long-term reference.</summary>
     internal int LongTermFrameIdx { get; set; }
 
+    /// <summary>Makes the entry describe a frame that has just been decoded: a short-term reference.</summary>
+    /// <param name="frameNum">The frame_num of the frame.</param>
+    internal void Reset(int frameNum)
+    {
+        FrameNum = frameNum;
+        FrameNumWrap = frameNum;
+        IsLongTerm = false;
+        LongTermFrameIdx = 0;
+    }
+
     /// <summary>Makes this entry a copy of another, so a slice can keep the marking the frame had when the slice was read.</summary>
     /// <param name="other">The entry to copy.</param>
     internal void Assign(H264RefPicture other)

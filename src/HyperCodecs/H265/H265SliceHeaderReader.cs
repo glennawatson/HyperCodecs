@@ -26,9 +26,9 @@ internal static class H265SliceHeaderReader
     /// <param name="nalType">The NAL unit type.</param>
     /// <param name="sets">The parameter sets received so far.</param>
     /// <param name="previous">The header of the slice before this segment, which a dependent segment continues.</param>
-    /// <returns>The header.</returns>
+    /// <param name="header">Receives the header; what it held is replaced. It must not be <paramref name="previous"/>.</param>
     /// <exception cref="InvalidDataException">The header is damaged or names a parameter set that was not sent.</exception>
-    internal static H265SliceHeader Read(ReadOnlySpan<byte> rbsp, int nalType, H265ParameterSets sets, H265SliceHeader? previous)
+    internal static void Read(ReadOnlySpan<byte> rbsp, int nalType, H265ParameterSets sets, H265SliceHeader? previous, H265SliceHeader header)
     {
         var reader = new MsbBitReader(rbsp);
         var first = reader.ReadBit();
@@ -47,8 +47,18 @@ internal static class H265SliceHeaderReader
             address = (int)reader.Read(BitHelpers.CeilLog2(sps.WidthInCtbs * sps.HeightInCtbs));
         }
 
-        var header = dependent ? Continue(previous) : ReadIndependent(ref reader, nalType, pps, sps);
-        var entries = ReadEntryPoints(ref reader, pps);
+        if (dependent)
+        {
+            header.CopyFrom(previous ?? throw new InvalidDataException("A dependent slice segment has no slice before it."));
+        }
+        else
+        {
+            header.Clear();
+            ReadIndependent(ref reader, nalType, pps, sps, header);
+        }
+
+        var segment = header.Segment;
+        ReadEntryPoints(ref reader, pps, segment.EntryPointList);
         SkipExtension(ref reader, pps);
         reader.Skip(1);
         reader.Align();
@@ -57,124 +67,100 @@ internal static class H265SliceHeaderReader
             throw new InvalidDataException("The H.265 slice header is damaged.");
         }
 
-        var segment = new H265SliceSegment(first, noOutput, ppsId, dependent, address, (int)(reader.BitPosition >> 3), entries);
-        return header with { Segment = segment };
+        segment.First = first;
+        segment.NoOutputOfPriorPics = noOutput;
+        segment.PpsId = ppsId;
+        segment.Dependent = dependent;
+        segment.Address = address;
+        segment.DataOffset = (int)(reader.BitPosition >> 3);
     }
-
-    /// <summary>Takes the settings a dependent slice segment shares with the slice before it.</summary>
-    /// <param name="previous">The header of the slice before the segment.</param>
-    /// <returns>That header.</returns>
-    /// <exception cref="InvalidDataException">There is no slice before the segment.</exception>
-    private static H265SliceHeader Continue(H265SliceHeader? previous) =>
-        previous ?? throw new InvalidDataException("A dependent slice segment has no slice before it.");
 
     /// <summary>Reads the part of the header that a dependent segment does not repeat.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="nalType">The NAL unit type.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="sps">The sequence parameter set.</param>
-    /// <returns>The header, with an empty segment that the caller fills in.</returns>
-    private static H265SliceHeader ReadIndependent(ref MsbBitReader reader, int nalType, H265Pps pps, H265Sps sps)
+    /// <param name="header">Receives what is read; the caller fills in the segment.</param>
+    private static void ReadIndependent(ref MsbBitReader reader, int nalType, H265Pps pps, H265Sps sps, H265SliceHeader header)
     {
         BitHelpers.Skip(ref reader, pps.ExtraSliceHeaderBits);
-        var sliceType = (int)ExpGolomb.ReadUe(ref reader);
-        var picOutput = !pps.Flags.OutputFlagPresent || reader.ReadBit();
+        header.SliceType = (int)ExpGolomb.ReadUe(ref reader);
+        header.PicOutput = !pps.Flags.OutputFlagPresent || reader.ReadBit();
         if (sps.SeparatePlanes)
         {
             reader.Skip(H265SliceHeaderBits.ColourPlane);
         }
 
-        var pocLsb = 0;
-        var shortTerm = new H265ShortTermRps([], [], [], []);
-        var longTerm = Array.Empty<H265LongTermRef>();
-        var temporalMvp = false;
         if (!H265Nal.IsIdr(nalType))
         {
-            pocLsb = (int)reader.Read(sps.Log2MaxPocLsb);
-            shortTerm = ReadShortTerm(ref reader, sps);
-            longTerm = ReadLongTerm(ref reader, sps);
-            temporalMvp = sps.Tools.TemporalMvpEnabled && reader.ReadBit();
+            header.PocLsb = (int)reader.Read(sps.Log2MaxPocLsb);
+            ReadShortTerm(ref reader, sps, header);
+            ReadLongTerm(ref reader, sps, header.LongTermList);
+            header.TemporalMvp = sps.Tools.TemporalMvpEnabled && reader.ReadBit();
         }
 
-        var saoLuma = sps.Tools.SaoEnabled && reader.ReadBit();
-        var saoChroma = sps.Tools.SaoEnabled && sps.ChromaArrayType != ChromaSampling.Monochrome && reader.ReadBit();
-        var partial = new H265SliceHeader(
-            new(false, false, 0, false, 0, 0, []),
-            sliceType,
-            picOutput,
-            pocLsb,
-            shortTerm,
-            longTerm,
-            temporalMvp,
-            saoLuma,
-            saoChroma,
-            NoRefs(),
-            null,
-            default,
-            default);
-        return ReadInterAndQuant(ref reader, partial, pps, sps);
+        header.SaoLuma = sps.Tools.SaoEnabled && reader.ReadBit();
+        header.SaoChroma = sps.Tools.SaoEnabled && sps.ChromaArrayType != ChromaSampling.Monochrome && reader.ReadBit();
+        ReadInterAndQuant(ref reader, header, pps, sps);
     }
 
     /// <summary>Reads the reference list settings, weights, quantiser and loop filter settings.</summary>
     /// <param name="reader">The bits.</param>
-    /// <param name="header">The header so far.</param>
+    /// <param name="header">The header so far, which receives the rest.</param>
     /// <param name="pps">The picture parameter set.</param>
     /// <param name="sps">The sequence parameter set.</param>
-    /// <returns>The completed header.</returns>
-    private static H265SliceHeader ReadInterAndQuant(ref MsbBitReader reader, H265SliceHeader header, H265Pps pps, H265Sps sps)
+    private static void ReadInterAndQuant(ref MsbBitReader reader, H265SliceHeader header, H265Pps pps, H265Sps sps)
     {
-        var refs = header.Refs;
-        H265PredWeights? weights = null;
         if (header.SliceType != H265SliceType.I)
         {
-            refs = ReadRefs(ref reader, header, pps);
+            ReadRefs(ref reader, header, pps);
             var weighted = header.SliceType == H265SliceType.P ? pps.Flags.WeightedPred : pps.Flags.WeightedBipred;
             if (weighted)
             {
-                weights = H265PredWeightReader.Read(ref reader, sps, new(refs.NumRefIdxL0, header.SliceType == H265SliceType.B ? refs.NumRefIdxL1 : 0));
+                header.HasWeights = true;
+                var counts = new ReferenceListCounts(header.Refs.NumRefIdxL0, header.SliceType == H265SliceType.B ? header.Refs.NumRefIdxL1 : 0);
+                H265PredWeightReader.Read(ref reader, sps, counts, header.WeightStorage);
             }
 
-            refs = refs with { MaxMergeCand = MaxMergeCandidates - (int)ExpGolomb.ReadUe(ref reader) };
+            header.Refs.MaxMergeCand = MaxMergeCandidates - (int)ExpGolomb.ReadUe(ref reader);
         }
 
-        var quant = ReadQuant(ref reader, pps);
-        var deblocking = ReadDeblocking(ref reader, pps, header.SaoLuma || header.SaoChroma);
-        return header with { Refs = refs, Weights = weights, Quant = quant, Deblocking = deblocking };
+        header.Quant = ReadQuant(ref reader, pps);
+        header.Deblocking = ReadDeblocking(ref reader, pps, header.SaoLuma || header.SaoChroma);
     }
-
-    /// <summary>Gets the reference settings of a slice that has none.</summary>
-    /// <returns>The settings.</returns>
-    private static H265RefSettings NoRefs() => new(0, 0, null, null, false, false, true, 0, 0);
 
     /// <summary>Reads the short-term reference picture set choice.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="sps">The sequence parameter set.</param>
-    /// <returns>The set.</returns>
+    /// <param name="header">Receives the set.</param>
     /// <exception cref="InvalidDataException">The index is out of range.</exception>
-    private static H265ShortTermRps ReadShortTerm(ref MsbBitReader reader, H265Sps sps)
+    private static void ReadShortTerm(ref MsbBitReader reader, H265Sps sps, H265SliceHeader header)
     {
         var count = sps.ShortTermSets.Count;
         if (!reader.ReadBit())
         {
             var start = reader.BitPosition;
-            var set = H265ShortTermRpsReader.Read(ref reader, count, count, sps.ShortTermSets);
-            return set with { HeaderBits = (int)(reader.BitPosition - start) };
+            var set = header.OwnedShortTerm;
+            H265ShortTermRpsReader.Read(ref reader, count, count, sps.ShortTermSets, set);
+            set.HeaderBits = (int)(reader.BitPosition - start);
+            header.UseOwnedShortTerm();
+            return;
         }
 
         var index = count > 1 ? (int)reader.Read(BitHelpers.CeilLog2(count)) : 0;
-        return index < count ? sps.ShortTermSets[index] : throw new InvalidDataException("A slice picks a short-term reference picture set that does not exist.");
+        header.UseSharedShortTerm(index < count ? sps.ShortTermSets[index] : throw new InvalidDataException("A slice picks a short-term reference picture set that does not exist."));
     }
 
     /// <summary>Reads the long-term reference pictures of the slice.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="sps">The sequence parameter set.</param>
-    /// <returns>The pictures.</returns>
+    /// <param name="entries">Receives the pictures.</param>
     /// <exception cref="InvalidDataException">The slice names too many pictures.</exception>
-    private static H265LongTermRef[] ReadLongTerm(ref MsbBitReader reader, H265Sps sps)
+    private static void ReadLongTerm(ref MsbBitReader reader, H265Sps sps, List<H265LongTermRef> entries)
     {
         if (!sps.LongTerm.Present)
         {
-            return [];
+            return;
         }
 
         var candidates = sps.LongTerm.PocLsb.Length;
@@ -185,7 +171,6 @@ internal static class H265SliceHeaderReader
             throw new InvalidDataException("A slice names too many long-term reference pictures.");
         }
 
-        var entries = new H265LongTermRef[total];
         var cycle = 0;
         for (var i = 0; i < total; i++)
         {
@@ -193,10 +178,8 @@ internal static class H265SliceHeaderReader
             var present = reader.ReadBit();
             var delta = present ? (int)ExpGolomb.ReadUe(ref reader) : 0;
             cycle = i == 0 || i == fromSps ? delta : cycle + delta;
-            entries[i] = named with { MsbPresent = present, DeltaPocMsbCycle = cycle };
+            entries.Add(named with { MsbPresent = present, DeltaPocMsbCycle = cycle });
         }
-
-        return entries;
     }
 
     /// <summary>Reads which long-term picture an entry names.</summary>
@@ -218,34 +201,32 @@ internal static class H265SliceHeaderReader
 
     /// <summary>Reads the reference list settings.</summary>
     /// <param name="reader">The bits.</param>
-    /// <param name="header">The header so far.</param>
+    /// <param name="header">The header so far, which receives the settings; the merge candidate count is still to be read.</param>
     /// <param name="pps">The picture parameter set.</param>
-    /// <returns>The settings, with the merge candidate count still to be read.</returns>
     /// <exception cref="InvalidDataException">A list is too long.</exception>
-    private static H265RefSettings ReadRefs(ref MsbBitReader reader, H265SliceHeader header, H265Pps pps)
+    private static void ReadRefs(ref MsbBitReader reader, H265SliceHeader header, H265Pps pps)
     {
         var isB = header.SliceType == H265SliceType.B;
         var sizes = ReadListSizes(ref reader, isB, pps);
         var total = header.NumPicTotalCurr;
-        int[]? modification0 = null;
-        int[]? modification1 = null;
+        var refs = header.Refs;
+        refs.NumRefIdxL0 = sizes.L0;
+        refs.NumRefIdxL1 = sizes.L1;
         if (pps.Flags.ListsModificationPresent && total > 1)
         {
-            modification0 = ReadModification(ref reader, sizes.L0, total);
-            modification1 = isB ? ReadModification(ref reader, sizes.L1, total) : null;
+            refs.HasModificationL0 = ReadModification(ref reader, sizes.L0, total, refs.ModificationStorageL0);
+            refs.HasModificationL1 = isB && ReadModification(ref reader, sizes.L1, total, refs.ModificationStorageL1);
         }
 
-        var mvdL1Zero = isB && reader.ReadBit();
-        var cabacInit = pps.Flags.CabacInitPresent && reader.ReadBit();
-        var fromL0 = true;
-        var collocatedIdx = 0;
-        if (header.TemporalMvp)
+        refs.MvdL1Zero = isB && reader.ReadBit();
+        refs.CabacInit = pps.Flags.CabacInitPresent && reader.ReadBit();
+        if (!header.TemporalMvp)
         {
-            fromL0 = !isB || reader.ReadBit();
-            collocatedIdx = (fromL0 ? sizes.L0 : sizes.L1) > 1 ? (int)ExpGolomb.ReadUe(ref reader) : 0;
+            return;
         }
 
-        return new(sizes.L0, sizes.L1, modification0, modification1, mvdL1Zero, cabacInit, fromL0, collocatedIdx, 0);
+        refs.CollocatedFromL0 = !isB || reader.ReadBit();
+        refs.CollocatedRefIdx = (refs.CollocatedFromL0 ? sizes.L0 : sizes.L1) > 1 ? (int)ExpGolomb.ReadUe(ref reader) : 0;
     }
 
     /// <summary>Reads the number of pictures in each reference list, which a slice may override.</summary>
@@ -276,22 +257,22 @@ internal static class H265SliceHeaderReader
     /// <param name="reader">The bits.</param>
     /// <param name="count">The pictures in the list.</param>
     /// <param name="total">The pictures the slice refers to.</param>
-    /// <returns>The entries, or <see langword="null"/> when the flag is off.</returns>
-    private static int[]? ReadModification(ref MsbBitReader reader, int count, int total)
+    /// <param name="entries">Receives the entries, at least <paramref name="count"/> long.</param>
+    /// <returns><see langword="true"/> when the flag is on and the entries were read.</returns>
+    private static bool ReadModification(ref MsbBitReader reader, int count, int total, int[] entries)
     {
         if (!reader.ReadBit())
         {
-            return null;
+            return false;
         }
 
         var bits = BitHelpers.CeilLog2(total);
-        var entries = new int[count];
         for (var i = 0; i < count; i++)
         {
             entries[i] = (int)reader.Read(bits);
         }
 
-        return entries;
+        return true;
     }
 
     /// <summary>Reads the quantiser settings.</summary>
@@ -347,13 +328,14 @@ internal static class H265SliceHeaderReader
     /// <summary>Reads the sizes of the subsets of slice data.</summary>
     /// <param name="reader">The bits.</param>
     /// <param name="pps">The picture parameter set.</param>
-    /// <returns>The size in bytes of each subset but the last.</returns>
+    /// <param name="entries">Receives the size in bytes of each subset but the last.</param>
     /// <exception cref="InvalidDataException">There are too many entry points.</exception>
-    private static int[] ReadEntryPoints(ref MsbBitReader reader, H265Pps pps)
+    private static void ReadEntryPoints(ref MsbBitReader reader, H265Pps pps, List<int> entries)
     {
+        entries.Clear();
         if (!pps.Tiles.Enabled && !pps.Flags.EntropyCodingSync)
         {
-            return [];
+            return;
         }
 
         var count = (int)ExpGolomb.ReadUe(ref reader);
@@ -364,17 +346,14 @@ internal static class H265SliceHeaderReader
 
         if (count == 0)
         {
-            return [];
+            return;
         }
 
         var bits = 1 + (int)ExpGolomb.ReadUe(ref reader);
-        var entries = new int[count];
         for (var i = 0; i < count; i++)
         {
-            entries[i] = 1 + (int)reader.Read(bits);
+            entries.Add(1 + (int)reader.Read(bits));
         }
-
-        return entries;
     }
 
     /// <summary>Skips the slice header extension bytes.</summary>

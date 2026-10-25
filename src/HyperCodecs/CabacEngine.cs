@@ -25,8 +25,8 @@ internal ref struct CabacEngine
     /// <summary>The value codIRange starts at.</summary>
     private const int InitialRange = 510;
 
-    /// <summary>The smallest codIRange that needs no renormalisation.</summary>
-    private const int MinRange = 256;
+    /// <summary>The shift that spreads the sign of a 64 bit value over all of its bits.</summary>
+    private const int MaskShift = 63;
 
     /// <summary>The leading zeros of a 32 bit value whose highest set bit is bit 8.</summary>
     private const int LeadingZerosAtMin = 23;
@@ -116,24 +116,19 @@ internal ref struct CabacEngine
     {
         var context = _contexts[ctxIdx] & ContextMask;
         var rangeLps = CabacTables.RangeLps[((context >> RowShift) << RowEntriesShift) + ((_range >> RangeIndexShift) & RangeIndexMask)];
-        _range -= rangeLps;
-        var scaled = (ulong)_range << _extra;
-        int bin;
-        if (_value < scaled)
-        {
-            bin = context & 1;
-            _contexts[ctxIdx] = CabacTables.ContextAfterMps[context];
-        }
-        else
-        {
-            bin = (context & 1) ^ 1;
-            _value -= scaled;
-            _range = rangeLps;
-            _contexts[ctxIdx] = CabacTables.ContextAfterLps[context];
-        }
+        var range = _range - rangeLps;
+        var scaled = (ulong)range << _extra;
 
+        // The bin is the less probable symbol when the value reaches the scaled range. The outcome of a bin cannot be predicted, so it
+        // selects with a mask (all ones for the less probable symbol) instead of a branch that would be wrong about as often as it is right.
+        var lpsMask = (long)(scaled - _value - 1) >> MaskShift;
+        var intMask = (int)lpsMask;
+        _value -= scaled & (ulong)lpsMask;
+        _range = range ^ ((range ^ rangeLps) & intMask);
+        var afterMps = CabacTables.ContextAfterMps[context];
+        _contexts[ctxIdx] = (byte)(afterMps ^ ((afterMps ^ CabacTables.ContextAfterLps[context]) & intMask));
         Renormalize();
-        return bin;
+        return (context ^ intMask) & 1;
     }
 
     /// <summary>Decodes one bin that is as likely to be 0 as 1 (clause 9.3.3.2.3).</summary>
@@ -194,11 +189,7 @@ internal ref struct CabacEngine
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Renormalize()
     {
-        if (_range >= MinRange)
-        {
-            return;
-        }
-
+        // The range is below 512, so the shift is zero for a range that needs no renormalisation and the branch is not needed.
         var shift = BitOperations.LeadingZeroCount((uint)_range) - LeadingZerosAtMin;
         _range <<= shift;
         _extra -= shift;

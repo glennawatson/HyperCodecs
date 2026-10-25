@@ -76,7 +76,7 @@ internal static class H265RpsDerivation
     /// <param name="usedFlags">Whether the current picture refers to each.</param>
     /// <param name="poc">The current picture order count.</param>
     /// <param name="makeMissing">Makes a stand-in for a missing picture.</param>
-    private static void FindShortTerm(List<H265Picture> used, H265Dpb dpb, int[] deltas, bool[] usedFlags, int poc, Func<int, H265Picture> makeMissing)
+    private static void FindShortTerm(List<H265Picture> used, H265Dpb dpb, ReadOnlySpan<int> deltas, ReadOnlySpan<bool> usedFlags, int poc, Func<int, H265Picture> makeMissing)
     {
         for (var i = 0; i < deltas.Length; i++)
         {

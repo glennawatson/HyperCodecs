@@ -2,6 +2,7 @@
 // Glenn Watson licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using HyperCodecs.Containers;
@@ -14,7 +15,7 @@ namespace HyperCodecs.Ogg;
 /// other streams.
 /// </summary>
 [DebuggerDisplay("OggPacketReader: page at {_pageOffset}")]
-internal sealed class OggPacketReader
+internal sealed class OggPacketReader : IDisposable
 {
     /// <summary>The bytes of a page header before its segment table.</summary>
     internal const int HeaderLength = 27;
@@ -50,7 +51,7 @@ internal sealed class OggPacketReader
     private readonly byte[] _lacing = new byte[FullSegment];
 
     /// <summary>The packet being joined.</summary>
-    private byte[] _buffer = new byte[ushort.MaxValue];
+    private byte[] _buffer = ArrayPool<byte>.Shared.Rent(ushort.MaxValue);
 
     /// <summary>The bytes in the buffer.</summary>
     private int _length;
@@ -102,6 +103,18 @@ internal sealed class OggPacketReader
 
     /// <summary>Gets the last packet.</summary>
     internal ReadOnlySpan<byte> Packet => _buffer.AsSpan(0, _length);
+
+    /// <summary>Gives the packet buffer back to the pool; the reader is not used afterwards.</summary>
+    public void Dispose()
+    {
+        var buffer = _buffer;
+        _buffer = [];
+        _length = 0;
+        if (buffer.Length > 0)
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
 
     /// <summary>Follows one stream, or the first stream seen.</summary>
     /// <param name="serial">The stream number.</param>
@@ -242,7 +255,10 @@ internal sealed class OggPacketReader
             var size = _lacing[_segment];
             if (_length + size > _buffer.Length)
             {
-                Array.Resize(ref _buffer, Math.Max(_buffer.Length << 1, _length + size));
+                var larger = ArrayPool<byte>.Shared.Rent(Math.Max(_buffer.Length << 1, _length + size));
+                Buffer.BlockCopy(_buffer, 0, larger, 0, _length);
+                ArrayPool<byte>.Shared.Return(_buffer);
+                _buffer = larger;
             }
 
             var body = _window.Get(_bodyOffset + _used, size);

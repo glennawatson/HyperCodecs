@@ -56,6 +56,9 @@ internal sealed class H264Picture
     /// <summary>The number of decoding jobs that use the picture, as the one decoding into it or as a reference.</summary>
     private int _users;
 
+    /// <summary>The entry that lists the picture among the reference frames, kept so each decoding of the picture makes none.</summary>
+    private H264RefPicture? _entry;
+
     /// <summary>Initializes a new instance of the <see cref="H264Picture"/> class.</summary>
     /// <param name="columns">The width in macroblocks.</param>
     /// <param name="rows">The height in macroblocks.</param>
@@ -272,6 +275,16 @@ internal sealed class H264Picture
         }
 
         _gate.Wait(new RowDecoded(this, row), tokens);
+    }
+
+    /// <summary>Gets the entry that lists the picture among the reference frames, as it stands when the picture has just been decoded.</summary>
+    /// <param name="frameNum">The frame_num of the picture.</param>
+    /// <returns>The entry, which is the same object each time and so holds nothing from the last time.</returns>
+    internal H264RefPicture ReferenceEntry(int frameNum)
+    {
+        var entry = _entry ??= new(this, frameNum);
+        entry.Reset(frameNum);
+        return entry;
     }
 
     /// <summary>Tells whether no decoding job uses the picture.</summary>

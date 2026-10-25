@@ -31,6 +31,24 @@ internal sealed class H264SliceWork
     /// <summary>Gets the tokens the thread gives up while it waits for another picture, or <see langword="null"/> when it holds none.</summary>
     internal WorkTokens? Tokens { get; }
 
+    /// <summary>Gets the decoder of CABAC intra slices, which the thread keeps from slice to slice.</summary>
+    internal H264CabacIntraSliceDecoder CabacIntra => field ??= new();
+
+    /// <summary>Gets the decoder of CABAC P slices.</summary>
+    internal H264CabacPSliceDecoder CabacP => field ??= new(this);
+
+    /// <summary>Gets the decoder of CABAC B slices.</summary>
+    internal H264CabacBSliceDecoder CabacB => field ??= new(this);
+
+    /// <summary>Gets the decoder of CAVLC intra slices.</summary>
+    internal H264IntraSliceDecoder CavlcIntra => field ??= new();
+
+    /// <summary>Gets the decoder of CAVLC P slices.</summary>
+    internal H264PSliceDecoder CavlcP => field ??= new(this);
+
+    /// <summary>Gets the decoder of CAVLC B slices.</summary>
+    internal H264BSliceDecoder CavlcB => field ??= new(this);
+
     /// <summary>Gets the macroblock being decoded.</summary>
     internal H264CurrentMb Mb { get; } = new();
 
