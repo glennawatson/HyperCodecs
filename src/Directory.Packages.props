@@ -17,7 +17,7 @@
     <PackageVersion Include="Microsoft.Testing.Extensions.CrashDump" Version="2.5.1" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.16.0-preview.2" />
     <PackageVersion Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.12.0" />
   </ItemGroup>
 
   <ItemGroup Label="Packaging tools">
