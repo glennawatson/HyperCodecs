@@ -38,12 +38,9 @@ for (var index = 0; index < args.Length; index++)
 {
     if (args[index] == "--root")
     {
+        // --root is followed by the checkout's path.
         index++;
-        if (index == args.Length)
-        {
-            throw new ArgumentException("--root requires a checkout path.");
-        }
-
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, args.Length, nameof(args));
         root = Path.GetFullPath(args[index]);
     }
     else if (args[index] != "--filter")
@@ -51,7 +48,7 @@ for (var index = 0; index < args.Length; index++)
         // A filter is passed on to the benchmark harness, so one that looks like an option would be read as one.
         if (args[index].StartsWith('-'))
         {
-            throw new ArgumentException($"'{args[index]}' is not a benchmark filter; filters cannot start with a dash.");
+            throw new ArgumentException($"'{args[index]}' is not a benchmark filter; filters cannot start with a dash.", nameof(args));
         }
 
         filters.Add(args[index]);
@@ -65,7 +62,7 @@ var project = Path.Combine(root, "src", "benchmarks", "HyperCodecs.Benchmarks");
 // The audit builds and runs the benchmarks of the checkout it is given, so it only accepts a HyperCodecs checkout.
 if (!File.Exists(Path.Combine(project, "HyperCodecs.Benchmarks.csproj")))
 {
-    throw new ArgumentException($"'{root}' is not a HyperCodecs checkout: it has no src/benchmarks/HyperCodecs.Benchmarks project.");
+    throw new ArgumentException($"'{root}' is not a HyperCodecs checkout: it has no src/benchmarks/HyperCodecs.Benchmarks project.", nameof(args));
 }
 
 var output = Path.Combine(
