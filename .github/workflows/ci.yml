@@ -49,7 +49,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Setup .NET
-        uses: glennawatson/actions-common/.github/actions/dotnet-environment@d1a1652f1d0e4ad7d2f77bda30b58f4b42ab0748 # main
+        uses: glennawatson/actions-common/.github/actions/dotnet-environment@e793ab9257b1b034ed5cb9695609338317ea1221 # main
         with:
           src-folder: 'src'
           solution-file: HyperCodecs.slnx
@@ -59,11 +59,11 @@ jobs:
             11.x
             10.x
       - name: Build
-        uses: glennawatson/actions-common/.github/actions/dotnet-build@d1a1652f1d0e4ad7d2f77bda30b58f4b42ab0748 # main
+        uses: glennawatson/actions-common/.github/actions/dotnet-build@e793ab9257b1b034ed5cb9695609338317ea1221 # main
         with:
           solution-file: HyperCodecs.slnx
       - name: Test
-        uses: glennawatson/actions-common/.github/actions/dotnet-test@d1a1652f1d0e4ad7d2f77bda30b58f4b42ab0748 # main
+        uses: glennawatson/actions-common/.github/actions/dotnet-test@e793ab9257b1b034ed5cb9695609338317ea1221 # main
         with:
           solution-file: HyperCodecs.slnx
           test-projects: tests/**/*.csproj
